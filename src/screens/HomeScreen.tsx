@@ -7,6 +7,7 @@ import {
   PanResponder,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -160,25 +161,174 @@ type ScreenRect = {
   height: number;
 };
 
+type AlertConfig = {
+  active: boolean;
+  bbox: Bbox;
+  email: string;
+  lastSceneDatetime: string;
+};
+
+type ComparisonMetric = {
+  key: string;
+  label: string;
+  previous: number;
+  current: number;
+  unit: string;
+  color: string;
+};
+
+type ComparisonPoint = {
+  date: string;
+  imageCount: number;
+  averageCloudCover: number;
+  bestCloudCover: number;
+  worstCloudCover: number;
+};
+
+type OpenMeteoResponse = {
+  timezone?: string;
+  current?: {
+    time?: string;
+    temperature_2m?: number;
+    relative_humidity_2m?: number;
+    apparent_temperature?: number;
+    precipitation?: number;
+    rain?: number;
+    snowfall?: number;
+    weather_code?: number;
+    cloud_cover?: number;
+    pressure_msl?: number;
+    wind_speed_10m?: number;
+    wind_direction_10m?: number;
+    wind_gusts_10m?: number;
+  };
+  hourly?: {
+    time?: string[];
+    temperature_2m?: number[];
+    relative_humidity_2m?: number[];
+    precipitation_probability?: number[];
+    precipitation?: number[];
+    cloud_cover?: number[];
+    wind_speed_10m?: number[];
+  };
+  daily?: {
+    time?: string[];
+    weather_code?: number[];
+    temperature_2m_max?: number[];
+    temperature_2m_min?: number[];
+    precipitation_sum?: number[];
+    precipitation_probability_max?: number[];
+    wind_speed_10m_max?: number[];
+    sunrise?: string[];
+    sunset?: string[];
+  };
+};
+
+type WeatherHour = {
+  time: string;
+  temperature: number;
+  precipitationProbability: number;
+  precipitation: number;
+  humidity: number;
+  cloudCover: number;
+  windSpeed: number;
+};
+
+type WeatherDay = {
+  date: string;
+  weatherCode: number;
+  minTemperature: number;
+  maxTemperature: number;
+  precipitation: number;
+  precipitationProbability: number;
+  windMax: number;
+  sunrise: string;
+  sunset: string;
+};
+
+type WeatherSnapshot = {
+  location: LatLng;
+  timezone: string;
+  current: {
+    time: string;
+    temperature: number;
+    apparentTemperature: number;
+    humidity: number;
+    precipitation: number;
+    rain: number;
+    snowfall: number;
+    weatherCode: number;
+    cloudCover: number;
+    pressure: number;
+    windSpeed: number;
+    windDirection: number;
+    windGusts: number;
+  };
+  hourly: WeatherHour[];
+  daily: WeatherDay[];
+};
+
+type OpenSkyResponse = {
+  time?: number;
+  states?: Array<
+    [
+      string,
+      string | null,
+      string | null,
+      number | null,
+      number | null,
+      number | null,
+      number | null,
+      number | null,
+      boolean,
+      number | null,
+      number | null,
+      number | null,
+      unknown,
+      number | null,
+      string | null,
+      boolean,
+      number | null,
+      number | null,
+    ]
+  >;
+};
+
+type LiveAircraft = {
+  id: string;
+  callsign: string;
+  originCountry: string;
+  lat: number;
+  lon: number;
+  altitudeM: number | null;
+  speedKmh: number;
+  heading: number | null;
+  verticalRate: number | null;
+  onGround: boolean;
+  lastContact: number | null;
+};
+
 const TILE_SIZE = 256;
 const MIN_ZOOM = 2;
 const MAX_ZOOM = 18;
-const MAX_TILE_SOURCE_ZOOM = 14;
+const MAX_TILE_SOURCE_ZOOM = 16;
 const INITIAL_ZOOM = 3.1;
 const ZOOM_STEP = 0.25;
-const MAX_SENTINEL_SELECTION_KM2 = 120000;
-const MAX_SENTINEL_AVAILABILITY_KM2 = 900000;
+const WORLD_BBOX: Bbox = [-180, -85.05112878, 180, 85.05112878];
 const NOMINATIM_SEARCH_URL = 'https://nominatim.openstreetmap.org/search';
 const EARTH_SEARCH_URL = 'https://earth-search.aws.element84.com/v1/search';
 const TITILER_COG_URL = 'https://titiler.xyz/cog/tiles/WebMercatorQuad';
+const SENTINEL_CLOUDLESS_TILE_URL = 'https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2024_3857/default/g';
 const BASE_TILE_URL = 'https://basemaps.cartocdn.com/rastertiles/voyager';
+const OPEN_METEO_FORECAST_URL = 'https://api.open-meteo.com/v1/forecast';
+const OPEN_SKY_PROXY_URL = '/api/opensky';
 const SENTINEL_SOURCE: SentinelSource = {
   label: 'Sentinel-2',
   shortLabel: 'S2',
   collection: 'sentinel-2-l2a',
   lookbackDays: 180,
-  limit: 80,
-  availabilityLimit: 48,
+  limit: 160,
+  availabilityLimit: 80,
   cloudCoverMax: 45,
   availabilityCloudCoverMax: 70,
   assetKeys: ['visual'],
@@ -258,6 +408,26 @@ function formatCoordinate(value: number, positive: string, negative: string) {
 
 function shortPlaceName(displayName: string) {
   return displayName.split(',').slice(0, 2).join(',').trim();
+}
+
+function formatBboxLabel([west, south, east, north]: Bbox) {
+  return `${formatCoordinate((south + north) / 2, 'N', 'S')} / ${formatCoordinate((west + east) / 2, 'E', 'W')}`;
+}
+
+function bboxCenter([west, south, east, north]: Bbox): LatLng {
+  return {
+    lat: (south + north) / 2,
+    lon: (west + east) / 2,
+  };
+}
+
+function openMailDraft(email: string, subject: string, body: string) {
+  const destination = email.trim();
+  const url = `mailto:${encodeURIComponent(destination)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(
+    body,
+  )}`;
+
+  void Linking.openURL(url);
 }
 
 function normalizeSelectionBox(box: SelectionBox) {
@@ -421,6 +591,243 @@ function sceneFromEarthSearchItem(item: EarthSearchItem, fallbackBbox: Bbox): Se
   };
 }
 
+function comparisonPointFromScenes(date: string, scenes: SentinelScene[]): ComparisonPoint {
+  const cloudValues = scenes.map((scene) => scene.cloudCover);
+  const averageCloudCover =
+    cloudValues.reduce((totalClouds, cloudCover) => totalClouds + cloudCover, 0) / Math.max(cloudValues.length, 1);
+
+  return {
+    date,
+    imageCount: scenes.length,
+    averageCloudCover: Math.round(clamp(averageCloudCover, 0, 100)),
+    bestCloudCover: Math.round(clamp(Math.min(...cloudValues), 0, 100)),
+    worstCloudCover: Math.round(clamp(Math.max(...cloudValues), 0, 100)),
+  };
+}
+
+function comparisonMetricsFromPoints(points: ComparisonPoint[]): ComparisonMetric[] {
+  const previous = points[Math.max(points.length - 2, 0)];
+  const current = points[points.length - 1] ?? previous;
+
+  if (!previous || !current) {
+    return [];
+  }
+
+  return [
+    {
+      key: 'imageCount',
+      label: 'Images S2',
+      previous: previous.imageCount,
+      current: current.imageCount,
+      unit: '',
+      color: '#5ecbff',
+    },
+    {
+      key: 'averageCloudCover',
+      label: 'Nuages moy.',
+      previous: previous.averageCloudCover,
+      current: current.averageCloudCover,
+      unit: '%',
+      color: '#b7c3d4',
+    },
+    {
+      key: 'bestCloudCover',
+      label: 'Meilleure image',
+      previous: previous.bestCloudCover,
+      current: current.bestCloudCover,
+      unit: '%',
+      color: '#33d69f',
+    },
+    {
+      key: 'worstCloudCover',
+      label: 'Nuages max',
+      previous: previous.worstCloudCover,
+      current: current.worstCloudCover,
+      unit: '%',
+      color: '#f7c948',
+    },
+  ];
+}
+
+function weatherCodeLabel(code: number) {
+  if (code === 0) {
+    return 'Ciel clair';
+  }
+
+  if ([1, 2, 3].includes(code)) {
+    return 'Nuages variables';
+  }
+
+  if ([45, 48].includes(code)) {
+    return 'Brouillard';
+  }
+
+  if ([51, 53, 55, 56, 57].includes(code)) {
+    return 'Bruine';
+  }
+
+  if ([61, 63, 65, 66, 67, 80, 81, 82].includes(code)) {
+    return 'Pluie';
+  }
+
+  if ([71, 73, 75, 77, 85, 86].includes(code)) {
+    return 'Neige';
+  }
+
+  if ([95, 96, 99].includes(code)) {
+    return 'Orage';
+  }
+
+  return 'Meteo variable';
+}
+
+function formatHourLabel(time: string) {
+  const date = new Date(time);
+
+  if (Number.isNaN(date.getTime())) {
+    return time.slice(11, 16);
+  }
+
+  return date.toLocaleTimeString('fr-FR', {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function temperatureColor(value: number) {
+  if (value <= 0) {
+    return '#80d9ff';
+  }
+
+  if (value < 12) {
+    return '#5ecbff';
+  }
+
+  if (value < 24) {
+    return '#33d69f';
+  }
+
+  if (value < 32) {
+    return '#f7c948';
+  }
+
+  return '#f9735b';
+}
+
+function weatherForecastUrl(location: LatLng) {
+  const parameters = new URLSearchParams({
+    latitude: location.lat.toFixed(5),
+    longitude: location.lon.toFixed(5),
+    current:
+      'temperature_2m,relative_humidity_2m,apparent_temperature,precipitation,rain,snowfall,weather_code,cloud_cover,pressure_msl,wind_speed_10m,wind_direction_10m,wind_gusts_10m',
+    hourly:
+      'temperature_2m,relative_humidity_2m,precipitation_probability,precipitation,cloud_cover,wind_speed_10m',
+    daily:
+      'weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max,wind_speed_10m_max,sunrise,sunset',
+    timezone: 'auto',
+    forecast_days: '7',
+  });
+
+  return `${OPEN_METEO_FORECAST_URL}?${parameters.toString()}`;
+}
+
+function weatherSnapshotFromResponse(data: OpenMeteoResponse, location: LatLng): WeatherSnapshot {
+  const current = data.current ?? {};
+  const hourly = data.hourly ?? {};
+  const daily = data.daily ?? {};
+
+  return {
+    location,
+    timezone: data.timezone ?? 'auto',
+    current: {
+      time: current.time ?? '',
+      temperature: current.temperature_2m ?? 0,
+      apparentTemperature: current.apparent_temperature ?? 0,
+      humidity: current.relative_humidity_2m ?? 0,
+      precipitation: current.precipitation ?? 0,
+      rain: current.rain ?? 0,
+      snowfall: current.snowfall ?? 0,
+      weatherCode: current.weather_code ?? 0,
+      cloudCover: current.cloud_cover ?? 0,
+      pressure: current.pressure_msl ?? 0,
+      windSpeed: current.wind_speed_10m ?? 0,
+      windDirection: current.wind_direction_10m ?? 0,
+      windGusts: current.wind_gusts_10m ?? 0,
+    },
+    hourly: (hourly.time ?? []).slice(0, 24).map((time, index) => ({
+      time,
+      temperature: hourly.temperature_2m?.[index] ?? 0,
+      precipitationProbability: hourly.precipitation_probability?.[index] ?? 0,
+      precipitation: hourly.precipitation?.[index] ?? 0,
+      humidity: hourly.relative_humidity_2m?.[index] ?? 0,
+      cloudCover: hourly.cloud_cover?.[index] ?? 0,
+      windSpeed: hourly.wind_speed_10m?.[index] ?? 0,
+    })),
+    daily: (daily.time ?? []).map((date, index) => ({
+      date,
+      weatherCode: daily.weather_code?.[index] ?? 0,
+      minTemperature: daily.temperature_2m_min?.[index] ?? 0,
+      maxTemperature: daily.temperature_2m_max?.[index] ?? 0,
+      precipitation: daily.precipitation_sum?.[index] ?? 0,
+      precipitationProbability: daily.precipitation_probability_max?.[index] ?? 0,
+      windMax: daily.wind_speed_10m_max?.[index] ?? 0,
+      sunrise: daily.sunrise?.[index] ?? '',
+      sunset: daily.sunset?.[index] ?? '',
+    })),
+  };
+}
+
+function openSkyUrl([west, south, east, north]: Bbox) {
+  const parameters = new URLSearchParams({
+    lamin: south.toFixed(4),
+    lomin: west.toFixed(4),
+    lamax: north.toFixed(4),
+    lomax: east.toFixed(4),
+  });
+
+  return `${OPEN_SKY_PROXY_URL}?${parameters.toString()}`;
+}
+
+function aircraftFromOpenSkyResponse(data: OpenSkyResponse): LiveAircraft[] {
+  return (data.states ?? []).flatMap((state) => {
+    const [id, callsign, originCountry, , lastContact, lon, lat, baroAltitude, onGround, velocity, heading, verticalRate, , geoAltitude] =
+      state;
+
+    if (typeof lat !== 'number' || typeof lon !== 'number') {
+      return [];
+    }
+
+    return [
+      {
+        id,
+        callsign: callsign?.trim() || id.toUpperCase(),
+        originCountry: originCountry ?? 'Inconnu',
+        lat,
+        lon,
+        altitudeM: typeof geoAltitude === 'number' ? geoAltitude : typeof baroAltitude === 'number' ? baroAltitude : null,
+        speedKmh: typeof velocity === 'number' ? Math.round(velocity * 3.6) : 0,
+        heading: typeof heading === 'number' ? heading : null,
+        verticalRate: typeof verticalRate === 'number' ? verticalRate : null,
+        onGround,
+        lastContact,
+      },
+    ];
+  });
+}
+
+function formatLiveTimestamp(timestamp: number | null) {
+  if (!timestamp) {
+    return 'inconnu';
+  }
+
+  return new Date(timestamp * 1000).toLocaleString('fr-FR', {
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+}
+
 function tileBbox(tile: Tile): Bbox {
   const northwest = pointToLatLng({ x: tile.x * TILE_SIZE, y: tile.y * TILE_SIZE }, tile.z);
   const southeast = pointToLatLng({ x: (tile.x + 1) * TILE_SIZE, y: (tile.y + 1) * TILE_SIZE }, tile.z);
@@ -432,6 +839,10 @@ function sentinelTileUrl(scene: SentinelScene, tile: Tile) {
   return `${TITILER_COG_URL}/${tile.z}/${tile.x}/${tile.y}.jpg?url=${encodeURIComponent(
     scene.visualHref,
   )}&resampling=bilinear`;
+}
+
+function sentinelCloudlessTileUrl(tile: Tile) {
+  return `${SENTINEL_CLOUDLESS_TILE_URL}/${tile.z}/${tile.y}/${tile.x}.jpg`;
 }
 
 function sentinelTleUrl(noradId: string) {
@@ -568,7 +979,7 @@ function webMousePosition(event: WebMouseLikeEvent) {
 }
 
 export function HomeScreen() {
-  const { width } = useWindowDimensions();
+  const { height, width } = useWindowDimensions();
   const isCompact = width < 860;
   const [query, setQuery] = useState('');
   const [zoom, setZoom] = useState(INITIAL_ZOOM);
@@ -579,7 +990,7 @@ export function HomeScreen() {
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectionBox, setSelectionBox] = useState<SelectionBox | null>(null);
   const [isDraggingMap, setIsDraggingMap] = useState(false);
-  const [selectedBbox, setSelectedBbox] = useState<Bbox | null>(null);
+  const [selectedBbox, setSelectedBbox] = useState<Bbox | null>(WORLD_BBOX);
   const [sentinelScenes, setSentinelScenes] = useState<SentinelScene[]>([]);
   const [activeSceneId, setActiveSceneId] = useState('');
   const [selectedScene, setSelectedScene] = useState<SentinelScene | null>(null);
@@ -588,25 +999,66 @@ export function HomeScreen() {
   const [sentinelTilesLoaded, setSentinelTilesLoaded] = useState(0);
   const [sentinelError, setSentinelError] = useState('');
   const [showAvailability, setShowAvailability] = useState(false);
+  const [isFlatMapMode, setIsFlatMapMode] = useState(true);
   const [availabilityScenes, setAvailabilityScenes] = useState<SentinelScene[]>([]);
   const [isLoadingAvailability, setIsLoadingAvailability] = useState(false);
   const [availabilityError, setAvailabilityError] = useState('');
   const [calendarMonth, setCalendarMonth] = useState(monthKeyFromDate(new Date()));
+  const [isCalendarCollapsed, setIsCalendarCollapsed] = useState(true);
+  const [isSentinelPanelDocked, setIsSentinelPanelDocked] = useState(true);
+  const [isOrbitCollapsed, setIsOrbitCollapsed] = useState(true);
+  const [isOpsPanelCollapsed, setIsOpsPanelCollapsed] = useState(true);
+  const [alertEmail, setAlertEmail] = useState('');
+  const [alertConfig, setAlertConfig] = useState<AlertConfig | null>(null);
+  const [alertStatus, setAlertStatus] = useState('Vue actuelle prete');
+  const [isCheckingAlert, setIsCheckingAlert] = useState(false);
+  const [showComparison, setShowComparison] = useState(false);
+  const [showWeather, setShowWeather] = useState(true);
+  const [weatherSnapshot, setWeatherSnapshot] = useState<WeatherSnapshot | null>(null);
+  const [isLoadingWeather, setIsLoadingWeather] = useState(false);
+  const [weatherError, setWeatherError] = useState('');
+  const [isPreparingReport, setIsPreparingReport] = useState(false);
+  const [showLiveTraffic, setShowLiveTraffic] = useState(false);
+  const [liveAircraft, setLiveAircraft] = useState<LiveAircraft[]>([]);
+  const [selectedAircraftId, setSelectedAircraftId] = useState('');
+  const [selectedAircraftSnapshot, setSelectedAircraftSnapshot] = useState<LiveAircraft | null>(null);
+  const [followedAircraftId, setFollowedAircraftId] = useState('');
+  const [isLoadingLiveTraffic, setIsLoadingLiveTraffic] = useState(false);
+  const [liveTrafficError, setLiveTrafficError] = useState('');
+  const [liveTrafficUpdatedAt, setLiveTrafficUpdatedAt] = useState<number | null>(null);
   const [tleRecords, setTleRecords] = useState<Record<string, TleRecord>>({});
   const [satellitePositions, setSatellitePositions] = useState<SatelliteLivePosition[]>([]);
   const [isLoadingOrbit, setIsLoadingOrbit] = useState(true);
   const dragStart = useRef<WorldPoint>({ x: 0, y: 0 });
   const webDragStart = useRef<WebDragSession | null>(null);
+  const mapHoverRef = useRef(false);
   const selectionStart = useRef<WorldPoint | null>(null);
   const selectionDraft = useRef<SelectionBox | null>(null);
   const searchCache = useRef<Record<string, SearchResult[]>>({});
   const sentinelRequestId = useRef(0);
   const availabilityRequestId = useRef(0);
+  const weatherRequestId = useRef(0);
+  const liveTrafficRequestId = useRef(0);
   const lastSentinelLoadKey = useRef('');
+  const cameraAnimationRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    setViewport((currentViewport) => {
+      if (currentViewport.width > 64 && currentViewport.height > 64) {
+        return currentViewport;
+      }
+
+      return {
+        width: Math.max(width - 36, 320),
+        height: Math.max(height - 150, 420),
+      };
+    });
+  }, [height, width]);
 
   const tileZoom = clamp(Math.ceil(zoom), MIN_ZOOM, MAX_TILE_SOURCE_ZOOM);
   const tileScale = 2 ** (zoom - tileZoom);
   const centerPoint = useMemo(() => latLngToPoint(center, tileZoom), [center, tileZoom]);
+  const isSentinelViewportActive = Boolean(selectedBbox);
 
   const visibleTiles = useMemo(() => {
     const tiles: Tile[] = [];
@@ -626,7 +1078,7 @@ export function HomeScreen() {
         }
 
         const wrappedX = wrap(x, tileCount);
-        tiles.push({
+        const tile = {
           key: `${tileZoom}-${x}-${y}`,
           url: `${BASE_TILE_URL}/${tileZoom}/${wrappedX}/${y}.png`,
           left: (x * TILE_SIZE - centerPoint.x) * tileScale + viewport.width / 2,
@@ -635,12 +1087,17 @@ export function HomeScreen() {
           x: wrappedX,
           y,
           z: tileZoom,
+        };
+
+        tiles.push({
+          ...tile,
+          url: isSentinelViewportActive ? sentinelCloudlessTileUrl(tile) : tile.url,
         });
       }
     }
 
     return tiles;
-  }, [centerPoint, tileScale, tileZoom, viewport]);
+  }, [centerPoint, isSentinelViewportActive, tileScale, tileZoom, viewport]);
 
   const selectedTitle = selectedPlace ? shortPlaceName(selectedPlace.display_name) : 'Carte Monde';
   const activeScene = sentinelScenes.find((scene) => scene.id === activeSceneId) ?? null;
@@ -657,7 +1114,10 @@ export function HomeScreen() {
     return visibleTiles.reduce<SentinelTile[]>((tiles, tile) => {
       const bbox = tileBbox(tile);
       const preferredScene = activeScene && bboxesIntersect(activeScene.bbox, bbox) ? activeScene : null;
-      const matchingScene = preferredScene ?? scenesForActiveDate.find((scene) => bboxesIntersect(scene.bbox, bbox));
+      const matchingScene =
+        preferredScene ??
+        scenesForActiveDate.find((scene) => bboxesIntersect(scene.bbox, bbox)) ??
+        sentinelScenes.find((scene) => bboxesIntersect(scene.bbox, bbox));
 
       if (matchingScene) {
         tiles.push({ scene: matchingScene, tile });
@@ -730,6 +1190,15 @@ export function HomeScreen() {
     () => Array.from(scenesByDate.keys()).sort((a, b) => b.localeCompare(a)),
     [scenesByDate],
   );
+  const comparisonTimeline = useMemo<ComparisonPoint[]>(
+    () =>
+      Array.from(scenesByDate.entries())
+        .sort(([dateA], [dateB]) => dateA.localeCompare(dateB))
+        .slice(-8)
+        .map(([date, scenes]) => comparisonPointFromScenes(date, scenes)),
+    [scenesByDate],
+  );
+  const comparisonMetrics = useMemo(() => comparisonMetricsFromPoints(comparisonTimeline), [comparisonTimeline]);
   const availableMonths = useMemo(
     () => Array.from(new Set(availableDates.map(monthKeyFromDateLabel))).sort(),
     [availableDates],
@@ -754,6 +1223,25 @@ export function HomeScreen() {
         ),
     [satellitePositions, centerPoint, tileScale, tileZoom, viewport],
   );
+  const aircraftScreenPositions = useMemo(
+    () =>
+      liveAircraft
+        .map((aircraft) => {
+          const screenPoint = projectLocationToScreenPoint({ lat: aircraft.lat, lon: aircraft.lon });
+          return { ...aircraft, ...screenPoint };
+        })
+        .filter(
+          (aircraft) =>
+            aircraft.left > -64 &&
+            aircraft.left < viewport.width + 64 &&
+            aircraft.top > -64 &&
+            aircraft.top < viewport.height + 64,
+        ),
+    [liveAircraft, centerPoint, tileScale, tileZoom, viewport],
+  );
+  const selectedAircraft =
+    (selectedAircraftId ? liveAircraft.find((aircraft) => aircraft.id === selectedAircraftId) : null) ??
+    selectedAircraftSnapshot;
   const displayedImageCount = sentinelTiles.length;
   const imageryLoadKey =
     displayedImageCount > 0
@@ -763,6 +1251,50 @@ export function HomeScreen() {
     displayedImageCount > 0 ? Math.min(100, Math.round((sentinelTilesLoaded / displayedImageCount) * 100)) : 0;
   const loadingProgress = isLoadingSentinel ? 24 : isLoadingSentinelTiles ? imageryProgress : 100;
   const visibleSceneDates = Array.from(new Set(sentinelScenes.map((scene) => scene.date)));
+  const weatherHours = weatherSnapshot?.hourly ?? [];
+  const weatherTemperatureValues = weatherHours.map((hour) => hour.temperature);
+  const weatherTemperatureMin = weatherTemperatureValues.length > 0 ? Math.min(...weatherTemperatureValues) : 0;
+  const weatherTemperatureMax = weatherTemperatureValues.length > 0 ? Math.max(...weatherTemperatureValues) : 1;
+  const weatherTemperatureRange = Math.max(weatherTemperatureMax - weatherTemperatureMin, 1);
+  const weatherMaxRain = Math.max(1, ...weatherHours.map((hour) => hour.precipitation));
+  const weatherMaxWind = Math.max(1, ...weatherHours.map((hour) => hour.windSpeed));
+  const weatherChartHours = weatherHours.filter((_, index) => index % 2 === 0).slice(0, 12);
+  const weatherInfoCards = weatherSnapshot
+    ? [
+        {
+          label: 'Ressenti',
+          value: `${Math.round(weatherSnapshot.current.apparentTemperature)}°C`,
+        },
+        {
+          label: 'Humidite',
+          value: `${Math.round(weatherSnapshot.current.humidity)}%`,
+        },
+        {
+          label: 'Nuages',
+          value: `${Math.round(weatherSnapshot.current.cloudCover)}%`,
+        },
+        {
+          label: 'Vent',
+          value: `${Math.round(weatherSnapshot.current.windSpeed)} km/h`,
+        },
+        {
+          label: 'Rafales',
+          value: `${Math.round(weatherSnapshot.current.windGusts)} km/h`,
+        },
+        {
+          label: 'Pression',
+          value: `${Math.round(weatherSnapshot.current.pressure)} hPa`,
+        },
+        {
+          label: 'Pluie',
+          value: `${weatherSnapshot.current.precipitation.toFixed(1)} mm`,
+        },
+        {
+          label: 'Neige',
+          value: `${weatherSnapshot.current.snowfall.toFixed(1)} cm`,
+        },
+      ]
+    : [];
 
   useEffect(() => {
     if (displayedImageCount === 0) {
@@ -781,8 +1313,75 @@ export function HomeScreen() {
     return () => clearTimeout(fallbackTimer);
   }, [imageryLoadKey, displayedImageCount]);
 
+  const cancelCameraAnimation = () => {
+    if (Platform.OS === 'web' && typeof window !== 'undefined' && cameraAnimationRef.current !== null) {
+      window.clearInterval(cameraAnimationRef.current);
+      cameraAnimationRef.current = null;
+    }
+  };
+
   const focusLocation = (location: LatLng, nextZoom = Math.max(zoom, 5)) => {
+    cancelCameraAnimation();
     setCenter(location);
+    setZoom(clamp(nextZoom, MIN_ZOOM, MAX_ZOOM));
+  };
+
+  const animateCameraTo = (location: LatLng, nextZoom = Math.max(zoom, 13.5)) => {
+    if (Platform.OS !== 'web' || typeof window === 'undefined') {
+      focusLocation(location, nextZoom);
+      return;
+    }
+
+    cancelCameraAnimation();
+
+    const startCenter = center;
+    const startZoom = zoom;
+    const startTime = Date.now();
+    const durationMs = 850;
+    const lonDelta = ((location.lon - startCenter.lon + 540) % 360) - 180;
+    const easeOut = (value: number) => 1 - (1 - value) ** 3;
+
+    const step = () => {
+      const progress = clamp((Date.now() - startTime) / durationMs, 0, 1);
+      const easedProgress = easeOut(progress);
+
+      setCenter({
+        lat: startCenter.lat + (location.lat - startCenter.lat) * easedProgress,
+        lon: startCenter.lon + lonDelta * easedProgress,
+      });
+      setZoom(clamp(startZoom + (nextZoom - startZoom) * easedProgress, MIN_ZOOM, MAX_ZOOM));
+
+      if (progress >= 1 && cameraAnimationRef.current !== null) {
+        window.clearInterval(cameraAnimationRef.current);
+        cameraAnimationRef.current = null;
+      }
+    };
+
+    cameraAnimationRef.current = window.setInterval(step, 16);
+    step();
+  };
+
+  useEffect(
+    () => () => {
+      cancelCameraAnimation();
+    },
+    [],
+  );
+
+  const focusBbox = ([west, south, east, north]: Bbox) => {
+    const northwest = latLngToPoint({ lat: north, lon: west }, 0);
+    const southeast = latLngToPoint({ lat: south, lon: east }, 0);
+    const bboxWidth = Math.max(Math.abs(southeast.x - northwest.x), 0.0001);
+    const bboxHeight = Math.max(Math.abs(southeast.y - northwest.y), 0.0001);
+    const availableWidth = Math.max(viewport.width - 180, 1);
+    const availableHeight = Math.max(viewport.height - 190, 1);
+    const fitZoom = Math.min(Math.log2(availableWidth / bboxWidth), Math.log2(availableHeight / bboxHeight));
+    const nextZoom = Math.round(clamp(fitZoom, MIN_ZOOM, MAX_ZOOM) / ZOOM_STEP) * ZOOM_STEP;
+
+    setCenter({
+      lat: (south + north) / 2,
+      lon: (west + east) / 2,
+    });
     setZoom(clamp(nextZoom, MIN_ZOOM, MAX_ZOOM));
   };
 
@@ -889,14 +1488,6 @@ export function HomeScreen() {
   const loadAvailabilityZones = async (bbox: Bbox) => {
     const requestId = availabilityRequestId.current + 1;
     availabilityRequestId.current = requestId;
-    const areaKm2 = bboxAreaKm2(bbox);
-
-    if (areaKm2 > MAX_SENTINEL_AVAILABILITY_KM2) {
-      setAvailabilityScenes([]);
-      setAvailabilityError(`Vue trop grande. Zoome pour afficher les zones ${SENTINEL_SOURCE.label}.`);
-      setIsLoadingAvailability(false);
-      return;
-    }
 
     setIsLoadingAvailability(true);
     setAvailabilityError('');
@@ -960,6 +1551,10 @@ export function HomeScreen() {
   };
 
   const handleMapLayout = (event: LayoutChangeEvent) => {
+    if (event.nativeEvent.layout.width < 64 || event.nativeEvent.layout.height < 64) {
+      return;
+    }
+
     setViewport({
       width: event.nativeEvent.layout.width,
       height: event.nativeEvent.layout.height,
@@ -972,6 +1567,12 @@ export function HomeScreen() {
       return clamp(nextZoom, MIN_ZOOM, MAX_ZOOM);
     });
   };
+
+  const changeZoomRef = useRef(changeZoom);
+
+  useEffect(() => {
+    changeZoomRef.current = changeZoom;
+  }, [changeZoom]);
 
   const screenToLocation = (x: number, y: number) => {
     const point = {
@@ -987,8 +1588,54 @@ export function HomeScreen() {
     [centerPoint, tileScale, tileZoom, viewport],
   );
   const currentViewportBboxKey = currentViewportBbox.map((value) => value.toFixed(3)).join(',');
+  const selectedBboxKey = selectedBbox ? selectedBbox.map((value) => value.toFixed(3)).join(',') : '';
+  const activeAnalysisBbox = selectedBbox ?? currentViewportBbox;
+  const activeAnalysisAreaKm2 = bboxAreaKm2(activeAnalysisBbox);
+
+  const toggleSentinelViewport = () => {
+    if (isSentinelViewportActive) {
+      clearSentinelLayer();
+      return;
+    }
+
+    setSelectedBbox(currentViewportBbox);
+    setIsSentinelPanelDocked(true);
+    setSentinelError('');
+    setIsLoadingSentinel(true);
+  };
+
+  const selectAircraft = (aircraft: LiveAircraft) => {
+    setSelectedAircraftId(aircraft.id);
+    setSelectedAircraftSnapshot(aircraft);
+    setSelectedScene(null);
+  };
+
+  const selectAircraftAtPoint = (x: number, y: number) => {
+    if (!showLiveTraffic || aircraftScreenPositions.length === 0) {
+      return false;
+    }
+
+    const aircraft = aircraftScreenPositions
+      .map((candidate) => ({
+        aircraft: candidate,
+        distance: Math.hypot(candidate.left - x, candidate.top - y),
+      }))
+      .filter((candidate) => candidate.distance <= 42)
+      .sort((a, b) => a.distance - b.distance)[0]?.aircraft;
+
+    if (!aircraft) {
+      return false;
+    }
+
+    selectAircraft(aircraft);
+    return true;
+  };
 
   const pickSceneAtPoint = (x: number, y: number) => {
+    if (selectAircraftAtPoint(x, y)) {
+      return;
+    }
+
     const location = screenToLocation(x, y);
     const loadedScenesAtPoint = sentinelScenes.filter((scene) => bboxContainsLocation(scene.bbox, location));
     const availabilityScenesAtPoint = showAvailability
@@ -997,7 +1644,17 @@ export function HomeScreen() {
     const activeSceneAtPoint =
       activeScene && loadedScenesAtPoint.some((scene) => scene.id === activeScene.id) ? activeScene : null;
 
+    setSelectedAircraftId('');
+    setSelectedAircraftSnapshot(null);
+    setFollowedAircraftId('');
     setSelectedScene(activeSceneAtPoint ?? loadedScenesAtPoint[0] ?? availabilityScenesAtPoint[0] ?? null);
+  };
+
+  const followAircraft = (aircraft: LiveAircraft) => {
+    setSelectedAircraftId(aircraft.id);
+    setSelectedAircraftSnapshot(aircraft);
+    setFollowedAircraftId(aircraft.id);
+    animateCameraTo({ lat: aircraft.lat, lon: aircraft.lon }, Math.max(zoom, 13.5));
   };
 
   const selectSceneDate = (date: string) => {
@@ -1012,6 +1669,296 @@ export function HomeScreen() {
     setCalendarMonth(monthKeyFromDateLabel(date));
   };
 
+  const fetchWeatherForBbox = async (bbox: Bbox) => {
+    const location = bboxCenter(bbox);
+    const response = await fetch(weatherForecastUrl(location));
+
+    if (!response.ok) {
+      throw new Error('Weather forecast failed');
+    }
+
+    const data = (await response.json()) as OpenMeteoResponse;
+    return weatherSnapshotFromResponse(data, location);
+  };
+
+  const loadWeatherForBbox = async (bbox: Bbox) => {
+    const requestId = weatherRequestId.current + 1;
+    weatherRequestId.current = requestId;
+
+    setIsLoadingWeather(true);
+    setWeatherError('');
+
+    try {
+      const snapshot = await fetchWeatherForBbox(bbox);
+
+      if (requestId === weatherRequestId.current) {
+        setWeatherSnapshot(snapshot);
+      }
+    } catch {
+      if (requestId === weatherRequestId.current) {
+        setWeatherSnapshot(null);
+        setWeatherError('Meteo indisponible pour cette zone.');
+      }
+    } finally {
+      if (requestId === weatherRequestId.current) {
+        setIsLoadingWeather(false);
+      }
+    }
+  };
+
+  const loadLiveTrafficForBbox = async (bbox: Bbox) => {
+    const requestId = liveTrafficRequestId.current + 1;
+    liveTrafficRequestId.current = requestId;
+
+    setIsLoadingLiveTraffic(true);
+    setLiveTrafficError('');
+
+    try {
+      const response = await fetch(openSkyUrl(bbox));
+
+      if (!response.ok) {
+        throw new Error('OpenSky failed');
+      }
+
+      const data = (await response.json()) as OpenSkyResponse;
+
+      if (requestId !== liveTrafficRequestId.current) {
+        return;
+      }
+
+      setLiveAircraft(aircraftFromOpenSkyResponse(data));
+      setLiveTrafficUpdatedAt(data.time ? data.time * 1000 : Date.now());
+    } catch {
+      if (requestId === liveTrafficRequestId.current) {
+        setLiveAircraft([]);
+        setLiveTrafficError('Avions indisponibles pour cette zone.');
+      }
+    } finally {
+      if (requestId === liveTrafficRequestId.current) {
+        setIsLoadingLiveTraffic(false);
+      }
+    }
+  };
+
+  const latestSceneForBbox = async (bbox: Bbox) => {
+    const response = await fetch(EARTH_SEARCH_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(earthSearchBody(bbox, SENTINEL_SOURCE.availabilityCloudCoverMax, 1)),
+    });
+
+    if (!response.ok) {
+      throw new Error('Alert search failed');
+    }
+
+    const data = (await response.json()) as { features?: EarthSearchItem[] };
+    const latestScene = (data.features ?? [])
+      .map((item) => sceneFromEarthSearchItem(item, bbox))
+      .filter((scene): scene is SentinelScene => Boolean(scene))
+      .sort((a, b) => new Date(b.datetime).getTime() - new Date(a.datetime).getTime())[0];
+
+    return latestScene ?? null;
+  };
+
+  const activateMailAlert = () => {
+    const email = alertEmail.trim();
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      setAlertStatus('Mail invalide');
+      return;
+    }
+
+    const baselineDatetime = sentinelScenes[0]?.datetime ?? activeScene?.datetime ?? new Date().toISOString();
+    setAlertConfig({
+      active: true,
+      bbox: activeAnalysisBbox,
+      email,
+      lastSceneDatetime: baselineDatetime,
+    });
+    setAlertStatus(`Alerte active depuis ${formatDateLabel(baselineDatetime)}`);
+  };
+
+  const checkMailAlert = async (silent = false) => {
+    const config = alertConfig;
+
+    if (!config) {
+      if (!silent) {
+        setAlertStatus('Active une alerte');
+      }
+      return;
+    }
+
+    setIsCheckingAlert(true);
+
+    try {
+      const latestScene = await latestSceneForBbox(config.bbox);
+
+      if (!latestScene) {
+        setAlertStatus('Aucune nouvelle image trouvee');
+        return;
+      }
+
+      const latestTime = new Date(latestScene.datetime).getTime();
+      const knownTime = new Date(config.lastSceneDatetime).getTime();
+
+      if (latestTime <= knownTime) {
+        setAlertStatus(`Rien de nouveau depuis ${formatDateLabel(config.lastSceneDatetime)}`);
+        return;
+      }
+
+      setAlertConfig({ ...config, lastSceneDatetime: latestScene.datetime });
+      setAlertStatus(`Nouvelle image ${latestScene.date}`);
+      openMailDraft(
+        config.email,
+        `Projet Forseti - nouvelle image ${SENTINEL_SOURCE.label}`,
+        `Nouvelle image ${SENTINEL_SOURCE.label} detectee le ${latestScene.date}.\n\nZone: ${formatBboxLabel(
+          config.bbox,
+        )}\nNuages: ${Math.round(latestScene.cloudCover)}%\nImage: ${latestScene.visualHref}`,
+      );
+    } catch {
+      if (!silent) {
+        setAlertStatus('Verification impossible');
+      }
+    } finally {
+      setIsCheckingAlert(false);
+    }
+  };
+
+  const buildReportText = (reportWeatherSnapshot = weatherSnapshot) => {
+    const zoneLabel = formatBboxLabel(activeAnalysisBbox);
+    const metrics = comparisonMetrics
+      .map((metric) => {
+        const delta = metric.current - metric.previous;
+        return `${metric.label}: ${metric.current}${metric.unit} (${delta >= 0 ? '+' : ''}${delta}${metric.unit})`;
+      })
+      .join('\n');
+    const weather = reportWeatherSnapshot
+      ? `\nMeteo actuelle:\nTemperature: ${Math.round(
+          reportWeatherSnapshot.current.temperature,
+        )}°C\nRessenti: ${Math.round(reportWeatherSnapshot.current.apparentTemperature)}°C\nEtat: ${weatherCodeLabel(
+          reportWeatherSnapshot.current.weatherCode,
+        )}\nHumidite: ${Math.round(reportWeatherSnapshot.current.humidity)}%\nNuages: ${Math.round(
+          reportWeatherSnapshot.current.cloudCover,
+        )}%\nVent: ${Math.round(reportWeatherSnapshot.current.windSpeed)} km/h\nPluie: ${reportWeatherSnapshot.current.precipitation.toFixed(
+          1,
+        )} mm`
+      : '\nMeteo actuelle: non chargee';
+
+    return `Projet Forseti - rapport Sentinel-2\nZone: ${zoneLabel}\nDate active: ${
+      activeDate || 'aucune'
+    }\nSource Sentinel-2: dates, nombre d'images et nuages viennent des metadonnees Earth Search.\nSource meteo: Open-Meteo.\n${weather}\n\nComparatif reel Sentinel-2:\n${
+      metrics || 'Pas assez de dates pour comparer.'
+    }`;
+  };
+
+  const mailReport = async () => {
+    const email = alertEmail.trim();
+
+    if (!email) {
+      setAlertStatus('Entre un mail');
+      return;
+    }
+
+    setIsPreparingReport(true);
+    setAlertStatus('Recherche des donnees reelles...');
+
+    try {
+      const reportWeatherSnapshot = await fetchWeatherForBbox(activeAnalysisBbox);
+
+      if (reportWeatherSnapshot) {
+        setWeatherSnapshot(reportWeatherSnapshot);
+      }
+
+      openMailDraft(email, 'Projet Forseti - rapport de zone', buildReportText(reportWeatherSnapshot));
+      setAlertStatus('Mail pret avec les donnees reelles.');
+    } catch {
+      openMailDraft(email, 'Projet Forseti - rapport de zone', buildReportText());
+      setAlertStatus('Mail pret, meteo non disponible.');
+    } finally {
+      setIsPreparingReport(false);
+    }
+  };
+
+  const openReportPdf = () => {
+    if (Platform.OS !== 'web' || typeof window === 'undefined') {
+      setAlertStatus('PDF disponible sur PC');
+      return;
+    }
+
+    const reportWindow = window.open('', '_blank', 'width=920,height=720');
+
+    if (!reportWindow) {
+      setAlertStatus('Popup PDF bloquee');
+      return;
+    }
+
+    const rows = comparisonMetrics
+      .map((metric) => {
+        const delta = metric.current - metric.previous;
+        return `<tr><td>${metric.label}</td><td>${metric.previous}${metric.unit}</td><td>${metric.current}${
+          metric.unit
+        }</td><td>${delta >= 0 ? '+' : ''}${delta}${metric.unit}</td></tr>`;
+      })
+      .join('');
+    const bars = comparisonMetrics
+      .map(
+        (metric) =>
+          `<div class="metric"><span>${metric.label}</span><div><b style="width:${clamp(
+            metric.current,
+            0,
+            100,
+          )}%;background:${metric.color}"></b></div><strong>${metric.current}${metric.unit}</strong></div>`,
+      )
+      .join('');
+    const weatherRows = weatherSnapshot
+      ? `
+        <tr><td>Temperature</td><td>${Math.round(weatherSnapshot.current.temperature)}°C</td></tr>
+        <tr><td>Ressenti</td><td>${Math.round(weatherSnapshot.current.apparentTemperature)}°C</td></tr>
+        <tr><td>Etat</td><td>${weatherCodeLabel(weatherSnapshot.current.weatherCode)}</td></tr>
+        <tr><td>Humidite</td><td>${Math.round(weatherSnapshot.current.humidity)}%</td></tr>
+        <tr><td>Nuages</td><td>${Math.round(weatherSnapshot.current.cloudCover)}%</td></tr>
+        <tr><td>Vent</td><td>${Math.round(weatherSnapshot.current.windSpeed)} km/h</td></tr>
+        <tr><td>Precipitations</td><td>${weatherSnapshot.current.precipitation.toFixed(1)} mm</td></tr>`
+      : '<tr><td colspan="2">Meteo non chargee</td></tr>';
+
+    reportWindow.document.write(`<!doctype html>
+      <html>
+        <head>
+          <title>Projet Forseti - rapport</title>
+          <style>
+            body { background:#05070a; color:#edf5ff; font-family:Arial,sans-serif; padding:32px; }
+            h1 { margin:0 0 6px; } p { color:#9babbf; }
+            table { border-collapse:collapse; margin-top:24px; width:100%; }
+            td, th { border:1px solid #273141; padding:10px; text-align:left; }
+            th { background:#101720; }
+            .metric { align-items:center; display:grid; gap:12px; grid-template-columns:140px 1fr 80px; margin:14px 0; }
+            .metric div { background:#151d28; height:12px; overflow:hidden; }
+            .metric b { display:block; height:100%; }
+            @media print { body { background:#fff; color:#111827; } p { color:#4b5563; } }
+          </style>
+        </head>
+        <body>
+          <h1>Projet Forseti</h1>
+          <p>Rapport Sentinel-2 - ${formatBboxLabel(activeAnalysisBbox)}</p>
+          <p>Date active: ${activeDate || 'aucune'} · images chargees: ${sentinelScenes.length}</p>
+          ${bars}
+          <table>
+            <thead><tr><th>Meteo</th><th>Valeur</th></tr></thead>
+            <tbody>${weatherRows}</tbody>
+          </table>
+          <table>
+            <thead><tr><th>Element</th><th>Ancien</th><th>Nouveau</th><th>Evolution</th></tr></thead>
+            <tbody>${rows || '<tr><td colspan="4">Pas assez de dates pour comparer.</td></tr>'}</tbody>
+          </table>
+        </body>
+      </html>`);
+    reportWindow.document.close();
+    reportWindow.focus();
+    reportWindow.print();
+  };
+
   useEffect(() => {
     if (!showAvailability) {
       return;
@@ -1023,6 +1970,49 @@ export function HomeScreen() {
 
     return () => clearTimeout(availabilityTimer);
   }, [currentViewportBboxKey, showAvailability]);
+
+  useEffect(() => {
+    const weatherTimer = setTimeout(() => {
+      void loadWeatherForBbox(activeAnalysisBbox);
+    }, 650);
+
+    return () => clearTimeout(weatherTimer);
+  }, [currentViewportBboxKey, selectedBboxKey]);
+
+  useEffect(() => {
+    if (!showLiveTraffic) {
+      liveTrafficRequestId.current += 1;
+      setLiveAircraft([]);
+      setSelectedAircraftId('');
+      setSelectedAircraftSnapshot(null);
+      setFollowedAircraftId('');
+      setLiveTrafficError('');
+      setIsLoadingLiveTraffic(false);
+      return;
+    }
+
+    void loadLiveTrafficForBbox(activeAnalysisBbox);
+    const liveTimer = setInterval(() => {
+      void loadLiveTrafficForBbox(activeAnalysisBbox);
+    }, 15000);
+
+    return () => clearInterval(liveTimer);
+  }, [showLiveTraffic, currentViewportBboxKey, selectedBboxKey]);
+
+  useEffect(() => {
+    if (!followedAircraftId) {
+      return;
+    }
+
+    const aircraft = liveAircraft.find((candidate) => candidate.id === followedAircraftId);
+
+    if (!aircraft) {
+      return;
+    }
+
+    setSelectedAircraftSnapshot(aircraft);
+    animateCameraTo({ lat: aircraft.lat, lon: aircraft.lon }, Math.max(zoom, 13.5));
+  }, [followedAircraftId, liveAircraft]);
 
   useEffect(() => {
     let isCancelled = false;
@@ -1090,20 +2080,23 @@ export function HomeScreen() {
   }, [tleRecords]);
 
   useEffect(() => {
-    if (!selectedBbox || selectionMode) {
+    if (!alertConfig?.active) {
       return;
     }
 
-    const areaKm2 = bboxAreaKm2(currentViewportBbox);
+    const alertTimer = setInterval(() => {
+      void checkMailAlert(true);
+    }, 5 * 60 * 1000);
 
-    if (areaKm2 > MAX_SENTINEL_SELECTION_KM2) {
-      setSentinelScenes([]);
-      setActiveSceneId('');
-      setIsLoadingSentinel(false);
-      setIsLoadingSentinelTiles(false);
-      setSentinelTilesLoaded(0);
-      setSelectedScene(null);
-      setSentinelError('Zone visible trop grande. Zoome ou selectionne une zone plus petite.');
+    return () => clearInterval(alertTimer);
+  }, [alertConfig]);
+
+  useEffect(() => {
+    if (!selectedBbox) {
+      return;
+    }
+
+    if (viewport.width < 64 || viewport.height < 64) {
       return;
     }
 
@@ -1114,7 +2107,7 @@ export function HomeScreen() {
     }, 520);
 
     return () => clearTimeout(viewportReloadTimer);
-  }, [currentViewportBboxKey, Boolean(selectedBbox), selectionMode]);
+  }, [currentViewportBboxKey, Boolean(selectedBbox)]);
 
   const zoomToSelection = (box: SelectionBox) => {
     const normalizedBox = normalizeSelectionBox(box);
@@ -1141,18 +2134,6 @@ export function HomeScreen() {
     setCenter(centerLocation);
     setZoom(Math.round(nextZoom / ZOOM_STEP) * ZOOM_STEP);
     setSelectedBbox(bbox);
-
-    if (bboxAreaKm2(bbox) > MAX_SENTINEL_SELECTION_KM2) {
-      setSentinelScenes([]);
-      setActiveSceneId('');
-      setIsLoadingSentinel(false);
-      setIsLoadingSentinelTiles(false);
-      setSentinelTilesLoaded(0);
-      setSelectedScene(null);
-      setSentinelError(`Zone trop grande. Selectionne une zone plus petite pour charger ${SENTINEL_SOURCE.label}.`);
-      return;
-    }
-
     setIsLoadingSentinel(true);
   };
 
@@ -1203,6 +2184,8 @@ export function HomeScreen() {
           selectionMode || Math.abs(gestureState.dx) > 3 || Math.abs(gestureState.dy) > 3,
         onMoveShouldSetPanResponderCapture: () => true,
         onPanResponderGrant: (event) => {
+          cancelCameraAnimation();
+          setFollowedAircraftId('');
           setIsDraggingMap(true);
 
           if (selectionMode) {
@@ -1284,19 +2267,62 @@ export function HomeScreen() {
         },
         onPanResponderTerminationRequest: () => false,
       }),
-    [activeScene, availabilityScenes, center, selectionMode, sentinelScenes, showAvailability, tileScale, tileZoom, zoom],
+    [
+      activeScene,
+      aircraftScreenPositions,
+      availabilityScenes,
+      center,
+      selectionMode,
+      sentinelScenes,
+      showAvailability,
+      showLiveTraffic,
+      tileScale,
+      tileZoom,
+      zoom,
+    ],
   );
 
   const webWheelProps =
     Platform.OS === 'web'
       ? {
-          onWheel: (event: { nativeEvent?: { deltaY?: number }; preventDefault?: () => void }) => {
+          onWheel: (event: { preventDefault?: () => void; stopPropagation?: () => void }) => {
             event.preventDefault?.();
-            const deltaY = event.nativeEvent?.deltaY ?? 0;
-            changeZoom(deltaY > 0 ? -ZOOM_STEP : ZOOM_STEP);
+            event.stopPropagation?.();
           },
         }
       : {};
+
+  const webMapHoverProps =
+    Platform.OS === 'web'
+      ? ({
+          onMouseEnter: () => {
+            mapHoverRef.current = true;
+          },
+          onMouseLeave: () => {
+            mapHoverRef.current = false;
+          },
+        } as never)
+      : {};
+
+  useEffect(() => {
+    if (Platform.OS !== 'web') {
+      return;
+    }
+
+    const handleWheel = (event: WheelEvent) => {
+      if (!mapHoverRef.current) {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+      changeZoomRef.current(event.deltaY > 0 ? -ZOOM_STEP : ZOOM_STEP);
+    };
+
+    window.addEventListener('wheel', handleWheel, { capture: true, passive: false });
+
+    return () => window.removeEventListener('wheel', handleWheel, true);
+  }, []);
 
   const webMouseDragProps =
     Platform.OS === 'web'
@@ -1313,6 +2339,8 @@ export function HomeScreen() {
 
             event.preventDefault?.();
             event.stopPropagation?.();
+            cancelCameraAnimation();
+            setFollowedAircraftId('');
             setIsDraggingMap(true);
 
             const position = webMousePosition(event);
@@ -1427,6 +2455,30 @@ export function HomeScreen() {
       : {};
 
   const selectionRect = selectionBox ? normalizeSelectionBox(selectionBox) : null;
+  const focusSentinelWindow = () => {
+    const targetBbox = activeScene?.bbox ?? selectedBbox;
+
+    if (targetBbox) {
+      focusBbox(targetBbox);
+    }
+  };
+  const sentinelPanelFocusProps =
+    Platform.OS === 'web'
+      ? ({
+          onDoubleClick: focusSentinelWindow,
+        } as never)
+      : {};
+  const overlayHoverProps =
+    Platform.OS === 'web'
+      ? ({
+          onMouseEnter: () => {
+            mapHoverRef.current = false;
+          },
+          onMouseLeave: () => {
+            mapHoverRef.current = true;
+          },
+        } as never)
+      : {};
   const mapInteractionStyle =
     Platform.OS === 'web'
       ? ({
@@ -1477,7 +2529,7 @@ export function HomeScreen() {
       </View>
 
       <View style={[styles.workspace, isCompact && styles.workspaceCompact]}>
-        <View style={styles.mapPanel} onLayout={handleMapLayout} {...webWheelProps}>
+        <View style={styles.mapPanel} onLayout={handleMapLayout}>
           <View style={styles.mapChromeTop}>
             <View style={styles.mapTitleBlock}>
               <Text style={styles.mapLabel}>WORLD / {SENTINEL_SOURCE.label.toUpperCase()}</Text>
@@ -1497,13 +2549,25 @@ export function HomeScreen() {
               <Text style={styles.zoomButtonText}>-</Text>
             </Pressable>
             <Pressable
-              onPress={() => {
-                setSelectionMode((currentMode) => !currentMode);
-                setSelectionBox(null);
-              }}
-              style={[styles.selectAreaButton, selectionMode && styles.selectAreaButtonActive]}
+              accessibilityLabel="Charger Sentinel-2 sur la vue visible"
+              onPress={toggleSentinelViewport}
+              style={[styles.sentinelLayerButton, isSentinelViewportActive && styles.sentinelLayerButtonActive]}
             >
-              <Text style={[styles.selectAreaText, selectionMode && styles.selectAreaTextActive]}>▣</Text>
+              <Text
+                style={[
+                  styles.sentinelLayerButtonText,
+                  isSentinelViewportActive && styles.sentinelLayerButtonTextActive,
+                ]}
+              >
+                S2
+              </Text>
+            </Pressable>
+            <Pressable
+              accessibilityLabel="Afficher la carte en vue 2D"
+              onPress={() => setIsFlatMapMode(true)}
+              style={[styles.map2DButton, isFlatMapMode && styles.map2DButtonActive]}
+            >
+              <Text style={[styles.map2DButtonText, isFlatMapMode && styles.map2DButtonTextActive]}>2D</Text>
             </Pressable>
             <Pressable
               accessibilityLabel="Afficher les zones Sentinel chargeables"
@@ -1514,12 +2578,21 @@ export function HomeScreen() {
                 Z
               </Text>
             </Pressable>
+            <Pressable
+              accessibilityLabel="Afficher les transports live reels"
+              onPress={() => setShowLiveTraffic((currentValue) => !currentValue)}
+              style={[styles.liveTrafficButton, showLiveTraffic && styles.liveTrafficButtonActive]}
+            >
+              <Text style={[styles.liveTrafficButtonText, showLiveTraffic && styles.liveTrafficButtonTextActive]}>
+                LIVE
+              </Text>
+            </Pressable>
             <Pressable onPress={() => focusLocation({ lat: 24, lon: 5 }, INITIAL_ZOOM)} style={styles.recenterButton}>
               <Text style={styles.recenterText}>◎</Text>
             </Pressable>
           </View>
 
-          <View style={[styles.mapViewport, mapInteractionStyle]} {...mapInputHandlers}>
+          <View style={[styles.mapViewport, mapInteractionStyle]} {...webMapHoverProps} {...webWheelProps} {...mapInputHandlers}>
             <View style={styles.tileLayer}>
               {visibleTiles.map((tile) => (
                 <View
@@ -1596,6 +2669,36 @@ export function HomeScreen() {
                 </View>
               ))}
 
+              {showLiveTraffic
+                ? aircraftScreenPositions.map((aircraft) => (
+                    <Pressable
+                      key={aircraft.id}
+                      hitSlop={10}
+                      onPress={() => selectAircraft(aircraft)}
+                      style={[
+                        styles.aircraftMarker,
+                        (selectedAircraftId === aircraft.id || followedAircraftId === aircraft.id) &&
+                          styles.aircraftMarkerSelected,
+                        { left: aircraft.left, top: aircraft.top },
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.aircraftGlyph,
+                          (selectedAircraftId === aircraft.id || followedAircraftId === aircraft.id) &&
+                            styles.aircraftGlyphSelected,
+                          aircraft.heading === null ? undefined : { transform: [{ rotate: `${aircraft.heading}deg` }] },
+                        ]}
+                      >
+                        ▲
+                      </Text>
+                      <Text style={styles.aircraftLabel}>
+                        {aircraft.callsign} · {aircraft.speedKmh} km/h
+                      </Text>
+                    </Pressable>
+                  ))
+                : null}
+
               {selectionRect ? (
                 <View
                   pointerEvents="none"
@@ -1657,133 +2760,560 @@ export function HomeScreen() {
             </View>
           ) : null}
 
-          <View style={[styles.orbitPanel, showAvailability && styles.orbitPanelStacked]}>
+          <View
+            style={[
+              styles.orbitPanel,
+              showAvailability && styles.orbitPanelStacked,
+              showLiveTraffic && styles.orbitPanelStackedWithLive,
+              isOrbitCollapsed && styles.orbitPanelCollapsed,
+            ]}
+          >
             <View style={styles.orbitPanelHeader}>
               <View style={styles.orbitLiveDot} />
               <Text style={styles.orbitTitle}>Sentinel-2 live</Text>
+              <Pressable onPress={() => setIsOrbitCollapsed((currentValue) => !currentValue)} style={styles.panelFoldButton}>
+                <Text style={styles.panelFoldText}>{isOrbitCollapsed ? '+' : '-'}</Text>
+              </Pressable>
             </View>
-            <Text style={styles.orbitMeta}>
-              {isLoadingOrbit
-                ? 'orbites en cours...'
-                : satellitePositions.length > 0
-                  ? satellitePositions
-                      .map((satellite) => `${satellite.label} ${satellite.lat.toFixed(1)} / ${satellite.lon.toFixed(1)}`)
-                      .join(' · ')
-                  : 'position indisponible'}
-            </Text>
+            {isOrbitCollapsed ? null : (
+              <Text style={styles.orbitMeta}>
+                {isLoadingOrbit
+                  ? 'orbites en cours...'
+                  : satellitePositions.length > 0
+                    ? satellitePositions
+                        .map((satellite) => `${satellite.label} ${satellite.lat.toFixed(1)} / ${satellite.lon.toFixed(1)}`)
+                        .join(' · ')
+                    : 'position indisponible'}
+              </Text>
+            )}
+          </View>
+
+          {showLiveTraffic ? (
+            <View style={styles.liveTrafficPanel}>
+              <View style={styles.liveTrafficHeader}>
+                <View style={styles.liveTrafficDot} />
+                <Text style={styles.liveTrafficTitle}>Transports live</Text>
+                <Text style={styles.liveTrafficMeta}>
+                  {isLoadingLiveTraffic
+                    ? 'refresh...'
+                    : liveTrafficUpdatedAt
+                      ? new Date(liveTrafficUpdatedAt).toLocaleTimeString('fr-FR', {
+                          hour: '2-digit',
+                          minute: '2-digit',
+                          second: '2-digit',
+                        })
+                      : 'en attente'}
+                </Text>
+              </View>
+              <View style={styles.liveTrafficGrid}>
+                <View style={styles.liveTrafficCardActive}>
+                  <Text style={styles.liveTrafficCardLabel}>Avions</Text>
+                  <Text style={styles.liveTrafficCardValue}>{liveAircraft.length}</Text>
+                  <Text style={styles.liveTrafficCardSource}>OpenSky · {aircraftScreenPositions.length} vus</Text>
+                </View>
+                <View style={styles.liveTrafficCard}>
+                  <Text style={styles.liveTrafficCardLabel}>Bateaux</Text>
+                  <Text style={styles.liveTrafficCardUnavailable}>AIS non connecte</Text>
+                </View>
+                <View style={styles.liveTrafficCard}>
+                  <Text style={styles.liveTrafficCardLabel}>Trains</Text>
+                  <Text style={styles.liveTrafficCardUnavailable}>GTFS local requis</Text>
+                </View>
+                <View style={styles.liveTrafficCard}>
+                  <Text style={styles.liveTrafficCardLabel}>Metro</Text>
+                  <Text style={styles.liveTrafficCardUnavailable}>GTFS local requis</Text>
+                </View>
+              </View>
+              <Text style={styles.liveTrafficNote} numberOfLines={2}>
+                {liveTrafficError ||
+                  'Seuls les points venant de flux reels sont affiches. Aucun bateau/train/metro invente.'}
+              </Text>
+            </View>
+          ) : null}
+
+          {selectedAircraft ? (
+            <View style={styles.objectPanel} {...overlayHoverProps}>
+              <View style={styles.objectPanelHeader}>
+                <View style={styles.liveTrafficDot} />
+                <Text style={styles.objectPanelKicker}>Objet live reel</Text>
+                <Pressable
+                  onPress={() => {
+                    cancelCameraAnimation();
+                    setSelectedAircraftId('');
+                    setSelectedAircraftSnapshot(null);
+                    setFollowedAircraftId('');
+                  }}
+                  style={styles.objectPanelClose}
+                >
+                  <Text style={styles.objectPanelCloseText}>X</Text>
+                </Pressable>
+              </View>
+              <Text style={styles.objectPanelTitle} numberOfLines={1}>
+                {selectedAircraft.callsign}
+              </Text>
+              <Text style={styles.objectPanelSubtitle} numberOfLines={1}>
+                Avion · OpenSky · {selectedAircraft.originCountry}
+              </Text>
+              <View style={styles.objectInfoGrid}>
+                <View style={styles.objectInfoCell}>
+                  <Text style={styles.objectInfoLabel}>ICAO</Text>
+                  <Text style={styles.objectInfoValue}>{selectedAircraft.id.toUpperCase()}</Text>
+                </View>
+                <View style={styles.objectInfoCell}>
+                  <Text style={styles.objectInfoLabel}>Position</Text>
+                  <Text style={styles.objectInfoValue}>
+                    {selectedAircraft.lat.toFixed(4)} / {selectedAircraft.lon.toFixed(4)}
+                  </Text>
+                </View>
+                <View style={styles.objectInfoCell}>
+                  <Text style={styles.objectInfoLabel}>Altitude</Text>
+                  <Text style={styles.objectInfoValue}>
+                    {selectedAircraft.altitudeM === null ? 'sol' : `${Math.round(selectedAircraft.altitudeM)} m`}
+                  </Text>
+                </View>
+                <View style={styles.objectInfoCell}>
+                  <Text style={styles.objectInfoLabel}>Vitesse</Text>
+                  <Text style={styles.objectInfoValue}>{selectedAircraft.speedKmh} km/h</Text>
+                </View>
+                <View style={styles.objectInfoCell}>
+                  <Text style={styles.objectInfoLabel}>Cap</Text>
+                  <Text style={styles.objectInfoValue}>
+                    {selectedAircraft.heading === null ? 'inconnu' : `${Math.round(selectedAircraft.heading)}°`}
+                  </Text>
+                </View>
+                <View style={styles.objectInfoCell}>
+                  <Text style={styles.objectInfoLabel}>Vertical</Text>
+                  <Text style={styles.objectInfoValue}>
+                    {selectedAircraft.verticalRate === null
+                      ? 'inconnu'
+                      : `${selectedAircraft.verticalRate.toFixed(1)} m/s`}
+                  </Text>
+                </View>
+              </View>
+              <Text style={styles.objectPanelTimestamp}>
+                Dernier signal: {formatLiveTimestamp(selectedAircraft.lastContact)}
+              </Text>
+              <Pressable onPress={() => followAircraft(selectedAircraft)} style={styles.objectFollowButton}>
+                <Text style={styles.objectFollowButtonText}>
+                  {followedAircraftId === selectedAircraft.id ? 'CAMERA SUIVI ACTIF' : 'CAMERA DEDANS'}
+                </Text>
+              </Pressable>
+            </View>
+          ) : null}
+
+          <View
+            style={[styles.opsPanel, isOpsPanelCollapsed ? styles.opsPanelCollapsed : styles.opsPanelExpanded]}
+            {...overlayHoverProps}
+          >
+            <View style={styles.opsPanelHeader}>
+              <View style={styles.alertDot} />
+              <Text style={styles.opsTitle}>{isOpsPanelCollapsed ? 'MAIL' : 'Alertes / rapport'}</Text>
+              <Pressable
+                onPress={() => setIsOpsPanelCollapsed((currentValue) => !currentValue)}
+                style={styles.panelFoldButton}
+              >
+                <Text style={styles.panelFoldText}>{isOpsPanelCollapsed ? '+' : '-'}</Text>
+              </Pressable>
+            </View>
+
+            {isOpsPanelCollapsed ? null : (
+              <ScrollView style={styles.opsPanelBody} contentContainerStyle={styles.opsPanelBodyContent}>
+                <TextInput
+                  value={alertEmail}
+                  onChangeText={setAlertEmail}
+                  placeholder="mail@exemple.com"
+                  placeholderTextColor="#647083"
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                  style={styles.alertInput}
+                />
+                <View style={styles.opsActionGrid}>
+                  <Pressable
+                    onPress={activateMailAlert}
+                    style={styles.opsButton}
+                  >
+                    <Text style={styles.opsButtonText}>ALERTE</Text>
+                  </Pressable>
+                  <Pressable
+                    disabled={!alertConfig || isCheckingAlert}
+                    onPress={() => void checkMailAlert(false)}
+                    style={[styles.opsButton, (!alertConfig || isCheckingAlert) && styles.opsButtonDisabled]}
+                  >
+                    <Text style={styles.opsButtonText}>{isCheckingAlert ? '...' : 'CHECK'}</Text>
+                  </Pressable>
+                  <Pressable
+                    disabled={comparisonTimeline.length < 2}
+                    onPress={() => setShowComparison((currentValue) => !currentValue)}
+                    style={[styles.opsButton, comparisonTimeline.length < 2 && styles.opsButtonDisabled]}
+                  >
+                    <Text style={styles.opsButtonText}>COMPARE</Text>
+                  </Pressable>
+                  <Pressable
+                    onPress={() => setShowWeather((currentValue) => !currentValue)}
+                    style={styles.opsButton}
+                  >
+                    <Text style={styles.opsButtonText}>METEO</Text>
+                  </Pressable>
+                  <Pressable
+                    disabled={comparisonMetrics.length === 0}
+                    onPress={openReportPdf}
+                    style={[styles.opsButton, comparisonMetrics.length === 0 && styles.opsButtonDisabled]}
+                  >
+                    <Text style={styles.opsButtonText}>PDF</Text>
+                  </Pressable>
+                  <Pressable
+                    disabled={comparisonMetrics.length === 0 || isPreparingReport}
+                    onPress={() => void mailReport()}
+                    style={[
+                      styles.opsButton,
+                      (comparisonMetrics.length === 0 || isPreparingReport) && styles.opsButtonDisabled,
+                    ]}
+                  >
+                    <Text style={styles.opsButtonText}>{isPreparingReport ? '...' : 'MAIL'}</Text>
+                  </Pressable>
+                </View>
+                <Text style={styles.alertStatus} numberOfLines={2}>
+                  {alertStatus}
+                </Text>
+
+                {showWeather ? (
+                  <View style={styles.weatherPanel}>
+                    <View style={styles.weatherHeader}>
+                      <View>
+                        <Text style={styles.weatherTitle}>Meteo zone</Text>
+                        <Text style={styles.weatherMeta} numberOfLines={1}>
+                          {`${formatBboxLabel(activeAnalysisBbox)} · ${Math.round(activeAnalysisAreaKm2)} km2`}
+                        </Text>
+                      </View>
+                      <Text style={styles.weatherSource}>Open-Meteo</Text>
+                    </View>
+
+                    {isLoadingWeather ? (
+                      <View style={styles.weatherLoadingShell}>
+                        <View style={styles.weatherLoadingFill} />
+                      </View>
+                    ) : null}
+
+                    {weatherSnapshot ? (
+                      <>
+                        <View style={styles.weatherNowRow}>
+                          <View>
+                            <Text style={styles.weatherTemperature}>
+                              {Math.round(weatherSnapshot.current.temperature)}°C
+                            </Text>
+                            <Text style={styles.weatherCondition}>
+                              {weatherCodeLabel(weatherSnapshot.current.weatherCode)}
+                            </Text>
+                          </View>
+                          <View style={styles.weatherNowMeta}>
+                            <Text style={styles.weatherNowMetaText}>
+                              {formatHourLabel(weatherSnapshot.current.time)}
+                            </Text>
+                            <Text style={styles.weatherNowMetaText}>
+                              {weatherSnapshot.location.lat.toFixed(3)} / {weatherSnapshot.location.lon.toFixed(3)}
+                            </Text>
+                          </View>
+                        </View>
+
+                        <Text style={styles.weatherChartTitle}>Temperature 24h</Text>
+                        <View style={styles.weatherChart}>
+                          {weatherChartHours.map((hour) => {
+                            const height =
+                              12 + ((hour.temperature - weatherTemperatureMin) / weatherTemperatureRange) * 58;
+
+                            return (
+                              <View key={hour.time} style={styles.weatherChartColumn}>
+                                <Text style={styles.weatherChartValue}>{Math.round(hour.temperature)}°</Text>
+                                <View
+                                  style={[
+                                    styles.weatherTempBar,
+                                    {
+                                      backgroundColor: temperatureColor(hour.temperature),
+                                      height: clamp(height, 12, 70),
+                                    },
+                                  ]}
+                                />
+                                <Text style={styles.weatherChartLabel}>{formatHourLabel(hour.time).slice(0, 2)}h</Text>
+                              </View>
+                            );
+                          })}
+                        </View>
+
+                        <View style={styles.weatherInfoGrid}>
+                          {weatherInfoCards.map((item) => (
+                            <View key={item.label} style={styles.weatherInfoCard}>
+                              <Text style={styles.weatherInfoLabel}>{item.label}</Text>
+                              <Text style={styles.weatherInfoValue}>{item.value}</Text>
+                            </View>
+                          ))}
+                        </View>
+
+                        <View style={styles.weatherDualCharts}>
+                          <View style={styles.weatherMiniChart}>
+                            <Text style={styles.weatherChartTitle}>Pluie</Text>
+                            {weatherChartHours.slice(0, 8).map((hour) => (
+                              <View key={`rain-${hour.time}`} style={styles.weatherMiniRow}>
+                                <Text style={styles.weatherMiniLabel}>{formatHourLabel(hour.time).slice(0, 2)}h</Text>
+                                <View style={styles.weatherMiniTrack}>
+                                  <View
+                                    style={[
+                                      styles.weatherRainBar,
+                                      { width: `${clamp((hour.precipitation / weatherMaxRain) * 100, 4, 100)}%` },
+                                    ]}
+                                  />
+                                </View>
+                                <Text style={styles.weatherMiniValue}>{hour.precipitation.toFixed(1)}</Text>
+                              </View>
+                            ))}
+                          </View>
+                          <View style={styles.weatherMiniChart}>
+                            <Text style={styles.weatherChartTitle}>Vent</Text>
+                            {weatherChartHours.slice(0, 8).map((hour) => (
+                              <View key={`wind-${hour.time}`} style={styles.weatherMiniRow}>
+                                <Text style={styles.weatherMiniLabel}>{formatHourLabel(hour.time).slice(0, 2)}h</Text>
+                                <View style={styles.weatherMiniTrack}>
+                                  <View
+                                    style={[
+                                      styles.weatherWindBar,
+                                      { width: `${clamp((hour.windSpeed / weatherMaxWind) * 100, 4, 100)}%` },
+                                    ]}
+                                  />
+                                </View>
+                                <Text style={styles.weatherMiniValue}>{Math.round(hour.windSpeed)}</Text>
+                              </View>
+                            ))}
+                          </View>
+                        </View>
+
+                        <Text style={styles.weatherChartTitle}>7 jours</Text>
+                        <View style={styles.weatherDailyRow}>
+                          {weatherSnapshot.daily.map((day) => (
+                            <View key={day.date} style={styles.weatherDailyCard}>
+                              <Text style={styles.weatherDailyDate}>{day.date.slice(5)}</Text>
+                              <Text style={styles.weatherDailyCode}>{weatherCodeLabel(day.weatherCode)}</Text>
+                              <Text style={styles.weatherDailyTemp}>
+                                {Math.round(day.minTemperature)} / {Math.round(day.maxTemperature)}°
+                              </Text>
+                              <Text style={styles.weatherDailyMeta}>
+                                {day.precipitation.toFixed(1)} mm · {Math.round(day.windMax)} km/h
+                              </Text>
+                            </View>
+                          ))}
+                        </View>
+                      </>
+                    ) : (
+                      <Text style={styles.weatherError}>{weatherError || 'La meteo de la vue actuelle va se charger.'}</Text>
+                    )}
+                  </View>
+                ) : null}
+
+                {showComparison && comparisonMetrics.length > 0 ? (
+                  <View style={styles.comparisonPanel}>
+                    <Text style={styles.comparisonSource}>Donnees reelles Sentinel-2</Text>
+                    {comparisonMetrics.map((metric) => {
+                      const delta = metric.current - metric.previous;
+                      const currentWidth =
+                        metric.key === 'imageCount' ? clamp(metric.current * 12, 0, 100) : clamp(metric.current, 0, 100);
+                      const previousWidth =
+                        metric.key === 'imageCount'
+                          ? clamp(metric.previous * 12, 0, 100)
+                          : clamp(metric.previous, 0, 100);
+
+                      return (
+                        <View key={metric.key} style={styles.metricRow}>
+                          <View style={styles.metricHeader}>
+                            <Text style={styles.metricLabel}>{metric.label}</Text>
+                            <Text style={[styles.metricDelta, delta >= 0 ? styles.metricDeltaUp : styles.metricDeltaDown]}>
+                              {delta >= 0 ? '+' : ''}
+                              {delta}
+                              {metric.unit}
+                            </Text>
+                          </View>
+                          <View style={styles.metricTrack}>
+                            <View style={[styles.metricBarPrevious, { width: `${previousWidth}%` }]} />
+                            <View
+                              style={[
+                                styles.metricBarCurrent,
+                                { backgroundColor: metric.color, width: `${currentWidth}%` },
+                              ]}
+                            />
+                          </View>
+                        </View>
+                      );
+                    })}
+                    <Text style={styles.timelineTitle}>Nuages moyens par date</Text>
+                    <View style={styles.timelineRow}>
+                      {comparisonTimeline.map((point) => (
+                        <View key={point.date} style={styles.timelineColumn}>
+                          <View
+                            style={[styles.timelineBar, { height: `${clamp(point.averageCloudCover, 12, 100)}%` }]}
+                          />
+                          <Text style={styles.timelineLabel}>{point.date.slice(5)}</Text>
+                        </View>
+                      ))}
+                    </View>
+                  </View>
+                ) : null}
+              </ScrollView>
+            )}
           </View>
 
           {selectedBbox ? (
-            <View style={styles.sentinelPanel}>
+            <View
+              style={[
+                styles.sentinelPanel,
+                isSentinelPanelDocked ? styles.sentinelPanelDocked : styles.sentinelPanelExpanded,
+              ]}
+              {...sentinelPanelFocusProps}
+            >
               <View style={styles.sentinelPanelHeader}>
                 <View style={styles.liveDot} />
-                <Text style={styles.sentinelTitle}>{SENTINEL_SOURCE.label}</Text>
-                <Text style={styles.sentinelMeta}>
-                  {isLoadingSentinel
-                    ? 'chargement des images recentes...'
-                    : isLoadingSentinelTiles
-                      ? `affichage des images ${loadingProgress}%...`
-                    : displayedImageCount > 0
-                      ? `mosaïque ${visibleSceneDates.length} date(s) / ${displayedImageCount} image(s)`
-                      : sentinelError || 'zone selectionnee'}
+                <Text style={styles.sentinelTitle} numberOfLines={1}>
+                  {isSentinelPanelDocked ? SENTINEL_SOURCE.shortLabel : SENTINEL_SOURCE.label}
                 </Text>
+                {isSentinelPanelDocked ? null : (
+                  <Text style={styles.sentinelMeta}>
+                    {isLoadingSentinel
+                      ? 'chargement des images recentes...'
+                      : isLoadingSentinelTiles
+                        ? `affichage des images ${loadingProgress}%...`
+                      : displayedImageCount > 0
+                        ? `mosaïque ${visibleSceneDates.length} date(s) / ${displayedImageCount} image(s)`
+                        : sentinelError || 'vue Sentinel-2 active'}
+                  </Text>
+                )}
+                <Pressable
+                  onPress={() => setIsSentinelPanelDocked((currentValue) => !currentValue)}
+                  style={styles.sentinelDockButton}
+                >
+                  <Text style={styles.sentinelDockText}>{isSentinelPanelDocked ? '‹' : '›'}</Text>
+                </Pressable>
                 <Pressable onPress={clearSentinelLayer} style={styles.sentinelCloseButton}>
                   <Text style={styles.sentinelCloseText}>X</Text>
                 </Pressable>
               </View>
 
-              {isLoadingSentinel || isLoadingSentinelTiles ? (
+              {isSentinelPanelDocked ? null : isLoadingSentinel || isLoadingSentinelTiles ? (
                 <View style={styles.loadingBarShell}>
                   <View style={[styles.loadingBarFill, { width: `${loadingProgress}%` }]} />
                 </View>
               ) : null}
 
-              {sentinelScenes.length > 0 ? (
+              {!isSentinelPanelDocked && sentinelScenes.length > 0 ? (
                 <>
                   <View style={styles.calendarPanel}>
-                    <View style={styles.calendarHeader}>
-                      <Pressable
-                        disabled={!canGoToPreviousMonth}
-                        onPress={() => setCalendarMonth((month) => shiftMonth(month, -1))}
-                        style={[styles.calendarNavButton, !canGoToPreviousMonth && styles.calendarNavButtonDisabled]}
-                      >
-                        <Text
-                          style={[
-                            styles.calendarNavText,
-                            !canGoToPreviousMonth && styles.calendarNavTextDisabled,
-                          ]}
-                        >
-                          ‹
+                    <View style={styles.calendarSummaryRow}>
+                      <View style={styles.calendarSummaryTextBlock}>
+                        <Text style={styles.calendarSummaryTitle}>Calendrier</Text>
+                        <Text style={styles.calendarSummaryMeta}>
+                          {activeDate ? `date active ${activeDate}` : 'aucune date chargee'}
                         </Text>
-                      </Pressable>
-                      <Text style={styles.calendarTitle}>{monthLabel(calendarMonth)}</Text>
+                      </View>
                       <Pressable
-                        disabled={!canGoToNextMonth}
-                        onPress={() => setCalendarMonth((month) => shiftMonth(month, 1))}
-                        style={[styles.calendarNavButton, !canGoToNextMonth && styles.calendarNavButtonDisabled]}
+                        onPress={() => setIsCalendarCollapsed((currentValue) => !currentValue)}
+                        style={styles.panelFoldButton}
                       >
-                        <Text style={[styles.calendarNavText, !canGoToNextMonth && styles.calendarNavTextDisabled]}>
-                          ›
-                        </Text>
+                        <Text style={styles.panelFoldText}>{isCalendarCollapsed ? '+' : '-'}</Text>
                       </Pressable>
                     </View>
-                    <View style={styles.calendarWeekRow}>
-                      {CALENDAR_WEEKDAYS.map((dayLabel, index) => (
-                        <Text key={`${dayLabel}-${index}`} style={styles.calendarWeekday}>
-                          {dayLabel}
-                        </Text>
-                      ))}
-                    </View>
-                    <View style={styles.calendarGrid}>
-                      {calendarDays.map((day) => {
-                        const hasImage = scenesByDate.has(day.date);
-                        const isActiveDate = activeDate === day.date;
 
-                        return (
+                    {isCalendarCollapsed ? null : (
+                      <>
+                        <View style={styles.calendarHeader}>
                           <Pressable
-                            key={day.date}
-                            disabled={!hasImage}
-                            onPress={() => selectSceneDate(day.date)}
+                            disabled={!canGoToPreviousMonth}
+                            onPress={() => setCalendarMonth((month) => shiftMonth(month, -1))}
                             style={[
-                              styles.calendarDay,
-                              !day.inMonth && styles.calendarDayOutside,
-                              hasImage && styles.calendarDayAvailable,
-                              isActiveDate && styles.calendarDayActive,
+                              styles.calendarNavButton,
+                              !canGoToPreviousMonth && styles.calendarNavButtonDisabled,
                             ]}
                           >
                             <Text
                               style={[
-                                styles.calendarDayText,
-                                !day.inMonth && styles.calendarDayTextOutside,
-                                hasImage && styles.calendarDayTextAvailable,
-                                isActiveDate && styles.calendarDayTextActive,
+                                styles.calendarNavText,
+                                !canGoToPreviousMonth && styles.calendarNavTextDisabled,
                               ]}
                             >
-                              {day.dayNumber}
+                              ‹
+                            </Text>
+                          </Pressable>
+                          <Text style={styles.calendarTitle}>{monthLabel(calendarMonth)}</Text>
+                          <Pressable
+                            disabled={!canGoToNextMonth}
+                            onPress={() => setCalendarMonth((month) => shiftMonth(month, 1))}
+                            style={[
+                              styles.calendarNavButton,
+                              !canGoToNextMonth && styles.calendarNavButtonDisabled,
+                            ]}
+                          >
+                            <Text
+                              style={[styles.calendarNavText, !canGoToNextMonth && styles.calendarNavTextDisabled]}
+                            >
+                              ›
+                            </Text>
+                          </Pressable>
+                        </View>
+                        <View style={styles.calendarWeekRow}>
+                          {CALENDAR_WEEKDAYS.map((dayLabel, index) => (
+                            <Text key={`${dayLabel}-${index}`} style={styles.calendarWeekday}>
+                              {dayLabel}
+                            </Text>
+                          ))}
+                        </View>
+                        <View style={styles.calendarGrid}>
+                          {calendarDays.map((day) => {
+                            const hasImage = scenesByDate.has(day.date);
+                            const isActiveDate = activeDate === day.date;
+
+                            return (
+                              <Pressable
+                                key={day.date}
+                                disabled={!hasImage}
+                                onPress={() => selectSceneDate(day.date)}
+                                style={[
+                                  styles.calendarDay,
+                                  !day.inMonth && styles.calendarDayOutside,
+                                  hasImage && styles.calendarDayAvailable,
+                                  isActiveDate && styles.calendarDayActive,
+                                ]}
+                              >
+                                <Text
+                                  style={[
+                                    styles.calendarDayText,
+                                    !day.inMonth && styles.calendarDayTextOutside,
+                                    hasImage && styles.calendarDayTextAvailable,
+                                    isActiveDate && styles.calendarDayTextActive,
+                                  ]}
+                                >
+                                  {day.dayNumber}
+                                </Text>
+                              </Pressable>
+                            );
+                          })}
+                        </View>
+                      </>
+                    )}
+                  </View>
+
+                  {isCalendarCollapsed ? null : (
+                    <View style={styles.dateStrip}>
+                      {sentinelScenes.slice(0, 6).map((scene) => {
+                        const isActive = scene.id === activeSceneId;
+
+                        return (
+                          <Pressable
+                            key={scene.id}
+                            onPress={() => selectSceneDate(scene.date)}
+                            style={[styles.dateButton, isActive && styles.dateButtonActive]}
+                          >
+                            <Text style={[styles.dateButtonText, isActive && styles.dateButtonTextActive]}>
+                              {scene.date}
                             </Text>
                           </Pressable>
                         );
                       })}
                     </View>
-                  </View>
-
-                  <View style={styles.dateStrip}>
-                    {sentinelScenes.slice(0, 6).map((scene) => {
-                      const isActive = scene.id === activeSceneId;
-
-                      return (
-                        <Pressable
-                          key={scene.id}
-                          onPress={() => selectSceneDate(scene.date)}
-                          style={[styles.dateButton, isActive && styles.dateButtonActive]}
-                        >
-                          <Text style={[styles.dateButtonText, isActive && styles.dateButtonTextActive]}>
-                            {scene.date}
-                          </Text>
-                        </Pressable>
-                      );
-                    })}
-                  </View>
+                  )}
                 </>
               ) : null}
             </View>
@@ -2157,6 +3687,50 @@ const styles = StyleSheet.create({
     fontSize: 23,
     lineHeight: 26,
   },
+  sentinelLayerButton: {
+    alignItems: 'center',
+    backgroundColor: '#111923',
+    borderColor: '#2b394b',
+    borderWidth: 1,
+    height: 42,
+    justifyContent: 'center',
+    width: 42,
+  },
+  sentinelLayerButtonActive: {
+    backgroundColor: '#102437',
+    borderColor: '#5ecbff',
+  },
+  sentinelLayerButtonText: {
+    color: '#edf5ff',
+    fontSize: 12,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  sentinelLayerButtonTextActive: {
+    color: '#80d9ff',
+  },
+  map2DButton: {
+    alignItems: 'center',
+    backgroundColor: '#111923',
+    borderColor: '#2b394b',
+    borderWidth: 1,
+    height: 42,
+    justifyContent: 'center',
+    width: 42,
+  },
+  map2DButtonActive: {
+    backgroundColor: '#102017',
+    borderColor: '#33d69f',
+  },
+  map2DButtonText: {
+    color: '#edf5ff',
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  map2DButtonTextActive: {
+    color: '#33d69f',
+  },
   selectAreaButton: {
     alignItems: 'center',
     backgroundColor: '#111923',
@@ -2200,6 +3774,28 @@ const styles = StyleSheet.create({
   },
   availabilityButtonTextActive: {
     color: '#80d9ff',
+  },
+  liveTrafficButton: {
+    alignItems: 'center',
+    backgroundColor: '#111923',
+    borderColor: '#2b394b',
+    borderWidth: 1,
+    height: 42,
+    justifyContent: 'center',
+    width: 42,
+  },
+  liveTrafficButtonActive: {
+    backgroundColor: '#241c0b',
+    borderColor: '#f7c948',
+  },
+  liveTrafficButtonText: {
+    color: '#edf5ff',
+    fontSize: 9,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  liveTrafficButtonTextActive: {
+    color: '#f7c948',
   },
   mapViewport: {
     flex: 1,
@@ -2311,6 +3907,41 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     marginTop: 7,
     paddingHorizontal: 6,
+    paddingVertical: 3,
+  },
+  aircraftMarker: {
+    alignItems: 'center',
+    marginLeft: -12,
+    marginTop: -12,
+    position: 'absolute',
+    zIndex: 6,
+  },
+  aircraftMarkerSelected: {
+    zIndex: 8,
+  },
+  aircraftGlyph: {
+    color: '#f7c948',
+    fontSize: 17,
+    fontWeight: '900',
+    lineHeight: 18,
+    textShadowColor: '#05070a',
+    textShadowOffset: { height: 1, width: 0 },
+    textShadowRadius: 2,
+  },
+  aircraftGlyphSelected: {
+    color: '#ffffff',
+    textShadowColor: '#f7c948',
+    textShadowRadius: 7,
+  },
+  aircraftLabel: {
+    backgroundColor: 'rgba(6, 10, 15, 0.88)',
+    borderColor: 'rgba(247, 201, 72, 0.55)',
+    borderWidth: 1,
+    color: '#f8fafc',
+    fontSize: 9,
+    fontWeight: '900',
+    marginTop: 5,
+    paddingHorizontal: 5,
     paddingVertical: 3,
   },
   mapMarker: {
@@ -2470,6 +4101,12 @@ const styles = StyleSheet.create({
   orbitPanelStacked: {
     top: 188,
   },
+  orbitPanelStackedWithLive: {
+    top: 278,
+  },
+  orbitPanelCollapsed: {
+    maxWidth: 220,
+  },
   orbitPanelHeader: {
     alignItems: 'center',
     flexDirection: 'row',
@@ -2492,18 +4129,614 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     marginTop: 5,
   },
+  liveTrafficPanel: {
+    backgroundColor: 'rgba(6, 10, 15, 0.92)',
+    borderColor: '#273141',
+    borderWidth: 1,
+    left: 18,
+    maxWidth: 410,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    position: 'absolute',
+    top: 188,
+    zIndex: 7,
+  },
+  liveTrafficHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 7,
+  },
+  liveTrafficDot: {
+    backgroundColor: '#f7c948',
+    borderRadius: 4,
+    height: 8,
+    width: 8,
+  },
+  liveTrafficTitle: {
+    color: '#edf5ff',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  liveTrafficMeta: {
+    color: '#9babbf',
+    fontSize: 10,
+    fontWeight: '800',
+    marginLeft: 'auto',
+  },
+  liveTrafficGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 7,
+    marginTop: 9,
+  },
+  liveTrafficCardActive: {
+    backgroundColor: '#171807',
+    borderColor: '#f7c948',
+    borderWidth: 1,
+    minWidth: 82,
+    paddingHorizontal: 8,
+    paddingVertical: 7,
+  },
+  liveTrafficCard: {
+    backgroundColor: '#101720',
+    borderColor: '#253244',
+    borderWidth: 1,
+    minWidth: 82,
+    paddingHorizontal: 8,
+    paddingVertical: 7,
+  },
+  liveTrafficCardLabel: {
+    color: '#9babbf',
+    fontSize: 9,
+    fontWeight: '900',
+  },
+  liveTrafficCardValue: {
+    color: '#f7c948',
+    fontSize: 20,
+    fontWeight: '900',
+    marginTop: 3,
+  },
+  liveTrafficCardSource: {
+    color: '#edf5ff',
+    fontSize: 9,
+    fontWeight: '800',
+    marginTop: 1,
+  },
+  liveTrafficCardUnavailable: {
+    color: '#718197',
+    fontSize: 9,
+    fontWeight: '800',
+    marginTop: 6,
+  },
+  liveTrafficNote: {
+    color: '#9babbf',
+    fontSize: 10,
+    fontWeight: '700',
+    marginTop: 8,
+  },
+  objectPanel: {
+    backgroundColor: 'rgba(6, 10, 15, 0.94)',
+    borderColor: '#f7c948',
+    borderWidth: 1,
+    bottom: 62,
+    left: 18,
+    maxWidth: 390,
+    paddingHorizontal: 12,
+    paddingVertical: 11,
+    position: 'absolute',
+    width: 360,
+    zIndex: 8,
+  },
+  objectPanelHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 8,
+  },
+  objectPanelKicker: {
+    color: '#f7c948',
+    flex: 1,
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 0,
+    textTransform: 'uppercase',
+  },
+  objectPanelClose: {
+    alignItems: 'center',
+    backgroundColor: '#111923',
+    borderColor: '#2b394b',
+    borderWidth: 1,
+    height: 24,
+    justifyContent: 'center',
+    width: 24,
+  },
+  objectPanelCloseText: {
+    color: '#edf5ff',
+    fontSize: 13,
+    fontWeight: '900',
+    lineHeight: 16,
+  },
+  objectPanelTitle: {
+    color: '#edf5ff',
+    fontSize: 20,
+    fontWeight: '900',
+    marginTop: 8,
+  },
+  objectPanelSubtitle: {
+    color: '#9babbf',
+    fontSize: 11,
+    fontWeight: '800',
+    marginTop: 3,
+  },
+  objectInfoGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 7,
+    marginTop: 10,
+  },
+  objectInfoCell: {
+    backgroundColor: '#101720',
+    borderColor: '#253244',
+    borderWidth: 1,
+    paddingHorizontal: 8,
+    paddingVertical: 7,
+    width: '48.8%',
+  },
+  objectInfoLabel: {
+    color: '#718197',
+    fontSize: 9,
+    fontWeight: '900',
+  },
+  objectInfoValue: {
+    color: '#edf5ff',
+    fontSize: 11,
+    fontWeight: '900',
+    marginTop: 4,
+  },
+  objectPanelTimestamp: {
+    color: '#9babbf',
+    fontSize: 10,
+    fontWeight: '800',
+    marginTop: 9,
+  },
+  objectFollowButton: {
+    alignItems: 'center',
+    backgroundColor: '#171807',
+    borderColor: '#f7c948',
+    borderWidth: 1,
+    height: 34,
+    justifyContent: 'center',
+    marginTop: 10,
+  },
+  objectFollowButtonText: {
+    color: '#f7c948',
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  panelFoldButton: {
+    alignItems: 'center',
+    backgroundColor: '#111923',
+    borderColor: '#2b394b',
+    borderWidth: 1,
+    height: 24,
+    justifyContent: 'center',
+    marginLeft: 'auto',
+    width: 24,
+  },
+  panelFoldText: {
+    color: '#edf5ff',
+    fontSize: 16,
+    fontWeight: '900',
+    lineHeight: 18,
+  },
+  opsPanel: {
+    backgroundColor: 'rgba(6, 10, 15, 0.92)',
+    borderColor: '#273141',
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    position: 'absolute',
+    right: 70,
+    top: 92,
+    zIndex: 7,
+  },
+  opsPanelExpanded: {
+    bottom: 56,
+    width: 390,
+  },
+  opsPanelCollapsed: {
+    width: 118,
+  },
+  opsPanelHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 8,
+  },
+  opsPanelBody: {
+    marginTop: 10,
+  },
+  opsPanelBodyContent: {
+    paddingBottom: 4,
+  },
+  alertDot: {
+    backgroundColor: '#f7c948',
+    borderRadius: 4,
+    height: 8,
+    width: 8,
+  },
+  opsTitle: {
+    color: '#edf5ff',
+    flex: 1,
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  alertInput: {
+    backgroundColor: '#070b11',
+    borderColor: '#273141',
+    borderWidth: 1,
+    color: '#edf5ff',
+    fontSize: 13,
+    height: 38,
+    paddingHorizontal: 10,
+  },
+  opsActionGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 7,
+    marginTop: 10,
+  },
+  opsButton: {
+    alignItems: 'center',
+    backgroundColor: '#111923',
+    borderColor: '#2b394b',
+    borderWidth: 1,
+    height: 32,
+    justifyContent: 'center',
+    minWidth: 62,
+    paddingHorizontal: 9,
+  },
+  opsButtonDisabled: {
+    opacity: 0.35,
+  },
+  opsButtonText: {
+    color: '#80d9ff',
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  alertStatus: {
+    color: '#9babbf',
+    fontSize: 11,
+    fontWeight: '700',
+    marginTop: 8,
+  },
+  weatherPanel: {
+    backgroundColor: 'rgba(17, 25, 35, 0.72)',
+    borderColor: '#253244',
+    borderWidth: 1,
+    marginTop: 10,
+    padding: 9,
+  },
+  weatherHeader: {
+    alignItems: 'flex-start',
+    flexDirection: 'row',
+    gap: 10,
+    justifyContent: 'space-between',
+  },
+  weatherTitle: {
+    color: '#edf5ff',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  weatherMeta: {
+    color: '#9babbf',
+    fontSize: 10,
+    fontWeight: '700',
+    marginTop: 2,
+    maxWidth: 250,
+  },
+  weatherSource: {
+    borderColor: '#2b394b',
+    borderWidth: 1,
+    color: '#80d9ff',
+    fontSize: 9,
+    fontWeight: '900',
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+  },
+  weatherLoadingShell: {
+    backgroundColor: '#151d28',
+    height: 5,
+    marginTop: 8,
+    overflow: 'hidden',
+  },
+  weatherLoadingFill: {
+    backgroundColor: '#f7c948',
+    height: '100%',
+    width: '58%',
+  },
+  weatherNowRow: {
+    alignItems: 'center',
+    borderBottomColor: '#253244',
+    borderBottomWidth: 1,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 9,
+    paddingBottom: 9,
+  },
+  weatherTemperature: {
+    color: '#edf5ff',
+    fontSize: 30,
+    fontWeight: '900',
+    lineHeight: 34,
+  },
+  weatherCondition: {
+    color: '#33d69f',
+    fontSize: 11,
+    fontWeight: '900',
+    marginTop: 2,
+  },
+  weatherNowMeta: {
+    alignItems: 'flex-end',
+    gap: 3,
+  },
+  weatherNowMetaText: {
+    color: '#9babbf',
+    fontSize: 10,
+    fontWeight: '800',
+  },
+  weatherInfoGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 7,
+    marginTop: 9,
+  },
+  weatherInfoCard: {
+    backgroundColor: '#101720',
+    borderColor: '#253244',
+    borderWidth: 1,
+    paddingHorizontal: 7,
+    paddingVertical: 6,
+    width: '23.5%',
+  },
+  weatherInfoLabel: {
+    color: '#718197',
+    fontSize: 9,
+    fontWeight: '900',
+  },
+  weatherInfoValue: {
+    color: '#edf5ff',
+    fontSize: 11,
+    fontWeight: '900',
+    marginTop: 3,
+  },
+  weatherChartTitle: {
+    color: '#edf5ff',
+    fontSize: 11,
+    fontWeight: '900',
+    marginTop: 10,
+  },
+  weatherChart: {
+    alignItems: 'flex-end',
+    borderBottomColor: '#253244',
+    borderBottomWidth: 1,
+    flexDirection: 'row',
+    gap: 5,
+    height: 104,
+    marginTop: 6,
+    paddingBottom: 14,
+  },
+  weatherChartColumn: {
+    alignItems: 'center',
+    flex: 1,
+    height: '100%',
+    justifyContent: 'flex-end',
+  },
+  weatherChartValue: {
+    color: '#9babbf',
+    fontSize: 9,
+    fontWeight: '800',
+    marginBottom: 3,
+  },
+  weatherTempBar: {
+    minHeight: 10,
+    width: '100%',
+  },
+  weatherChartLabel: {
+    bottom: -14,
+    color: '#718197',
+    fontSize: 8,
+    fontWeight: '800',
+    position: 'absolute',
+  },
+  weatherDualCharts: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  weatherMiniChart: {
+    flex: 1,
+  },
+  weatherMiniRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 5,
+    marginTop: 5,
+  },
+  weatherMiniLabel: {
+    color: '#718197',
+    fontSize: 8,
+    fontWeight: '900',
+    width: 18,
+  },
+  weatherMiniTrack: {
+    backgroundColor: '#151d28',
+    flex: 1,
+    height: 7,
+    overflow: 'hidden',
+  },
+  weatherRainBar: {
+    backgroundColor: '#5ecbff',
+    height: '100%',
+  },
+  weatherWindBar: {
+    backgroundColor: '#f7c948',
+    height: '100%',
+  },
+  weatherMiniValue: {
+    color: '#9babbf',
+    fontSize: 8,
+    fontWeight: '900',
+    textAlign: 'right',
+    width: 20,
+  },
+  weatherDailyRow: {
+    flexDirection: 'row',
+    gap: 6,
+    marginTop: 6,
+  },
+  weatherDailyCard: {
+    backgroundColor: '#101720',
+    borderColor: '#253244',
+    borderWidth: 1,
+    flex: 1,
+    minHeight: 78,
+    padding: 5,
+  },
+  weatherDailyDate: {
+    color: '#80d9ff',
+    fontSize: 9,
+    fontWeight: '900',
+  },
+  weatherDailyCode: {
+    color: '#edf5ff',
+    fontSize: 8,
+    fontWeight: '800',
+    marginTop: 4,
+  },
+  weatherDailyTemp: {
+    color: '#33d69f',
+    fontSize: 9,
+    fontWeight: '900',
+    marginTop: 4,
+  },
+  weatherDailyMeta: {
+    color: '#718197',
+    fontSize: 8,
+    fontWeight: '800',
+    marginTop: 3,
+  },
+  weatherError: {
+    color: '#f9735b',
+    fontSize: 11,
+    fontWeight: '800',
+    marginTop: 9,
+  },
+  comparisonPanel: {
+    backgroundColor: 'rgba(17, 25, 35, 0.72)',
+    borderColor: '#253244',
+    borderWidth: 1,
+    gap: 10,
+    marginTop: 10,
+    padding: 9,
+  },
+  comparisonSource: {
+    color: '#80d9ff',
+    fontSize: 10,
+    fontWeight: '900',
+  },
+  metricRow: {
+    gap: 5,
+  },
+  metricHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  metricLabel: {
+    color: '#edf5ff',
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  metricDelta: {
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  metricDeltaUp: {
+    color: '#33d69f',
+  },
+  metricDeltaDown: {
+    color: '#f9735b',
+  },
+  metricTrack: {
+    backgroundColor: '#151d28',
+    height: 10,
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  metricBarPrevious: {
+    backgroundColor: 'rgba(155, 171, 191, 0.35)',
+    bottom: 0,
+    left: 0,
+    position: 'absolute',
+    top: 0,
+  },
+  metricBarCurrent: {
+    bottom: 0,
+    left: 0,
+    position: 'absolute',
+    top: 0,
+  },
+  timelineRow: {
+    alignItems: 'flex-end',
+    borderTopColor: '#253244',
+    borderTopWidth: 1,
+    flexDirection: 'row',
+    gap: 6,
+    height: 74,
+    marginTop: 2,
+    paddingTop: 10,
+  },
+  timelineTitle: {
+    color: '#9babbf',
+    fontSize: 10,
+    fontWeight: '900',
+  },
+  timelineColumn: {
+    alignItems: 'center',
+    flex: 1,
+    gap: 4,
+    height: '100%',
+    justifyContent: 'flex-end',
+  },
+  timelineBar: {
+    backgroundColor: '#5ecbff',
+    minHeight: 8,
+    width: '100%',
+  },
+  timelineLabel: {
+    color: '#718197',
+    fontSize: 9,
+    fontWeight: '800',
+  },
   sentinelPanel: {
     backgroundColor: 'rgba(6, 10, 15, 0.92)',
     borderColor: '#273141',
     borderWidth: 1,
     bottom: 48,
-    left: 18,
-    maxWidth: 560,
     paddingHorizontal: 12,
     paddingVertical: 10,
     position: 'absolute',
-    right: 86,
     zIndex: 7,
+  },
+  sentinelPanelExpanded: {
+    left: 18,
+    maxWidth: 560,
+    right: 86,
+  },
+  sentinelPanelDocked: {
+    right: 18,
+    width: 132,
+    paddingHorizontal: 10,
   },
   sentinelPanelHeader: {
     alignItems: 'center',
@@ -2519,6 +4752,21 @@ const styles = StyleSheet.create({
     color: '#9babbf',
     flex: 1,
     fontSize: 12,
+  },
+  sentinelDockButton: {
+    alignItems: 'center',
+    backgroundColor: '#111923',
+    borderColor: '#2b394b',
+    borderWidth: 1,
+    height: 26,
+    justifyContent: 'center',
+    width: 26,
+  },
+  sentinelDockText: {
+    color: '#80d9ff',
+    fontSize: 21,
+    fontWeight: '900',
+    lineHeight: 23,
   },
   sentinelCloseButton: {
     alignItems: 'center',
@@ -2552,10 +4800,31 @@ const styles = StyleSheet.create({
     marginTop: 10,
     padding: 9,
   },
+  calendarSummaryRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 10,
+  },
+  calendarSummaryTextBlock: {
+    flex: 1,
+    minWidth: 0,
+  },
+  calendarSummaryTitle: {
+    color: '#edf5ff',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  calendarSummaryMeta: {
+    color: '#9babbf',
+    fontSize: 11,
+    fontWeight: '700',
+    marginTop: 2,
+  },
   calendarHeader: {
     alignItems: 'center',
     flexDirection: 'row',
     justifyContent: 'space-between',
+    marginTop: 10,
   },
   calendarNavButton: {
     alignItems: 'center',
